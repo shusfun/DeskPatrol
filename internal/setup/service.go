@@ -74,8 +74,8 @@ func Validate(req Request) error {
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" {
 		return errors.New("公网地址必须是无路径的 HTTPS 地址")
 	}
-	if req.AgentPublicPort < 1 || req.AgentPublicPort > 65535 || req.AgentPublicPort == 443 {
-		return errors.New("Agent 公网端口必须介于 1 和 65535，且不能与管理端 443 冲突")
+	if req.AgentPublicPort < 1 || req.AgentPublicPort > 65535 {
+		return errors.New("Agent 公网端口必须介于 1 和 65535")
 	}
 	if !filepath.IsAbs(req.StorageDir) {
 		return errors.New("存储目录必须是绝对路径")

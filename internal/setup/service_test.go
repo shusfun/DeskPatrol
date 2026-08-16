@@ -23,11 +23,21 @@ func TestValidateRequiresSixCharacterAdminPassword(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsManagementAndAgentPortCollision(t *testing.T) {
+func TestValidateAcceptsSharedHTTPSPort(t *testing.T) {
 	req := validRequest()
 	req.AgentPublicPort = 443
-	if err := Validate(req); err == nil {
-		t.Fatal("应拒绝 Agent 与管理端端口冲突")
+	if err := Validate(req); err != nil {
+		t.Fatalf("独立域名或路径路由应允许 Agent 复用 443 端口，得到 %v", err)
+	}
+}
+
+func TestValidateRejectsAgentPortOutsideValidRange(t *testing.T) {
+	for _, port := range []int{0, -1, 65536} {
+		req := validRequest()
+		req.AgentPublicPort = port
+		if err := Validate(req); err == nil {
+			t.Fatalf("应拒绝 Agent 端口 %d", port)
+		}
 	}
 }
 
