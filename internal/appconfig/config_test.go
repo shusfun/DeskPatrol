@@ -8,7 +8,7 @@ import (
 )
 
 func validConfig() Config {
-	return Config{Listen: "127.0.0.1:18123", PublicURL: "https://monitor.example.com", AgentPublicPort: 8443, StorageDir: "/var/lib/deskpatrol", GitHubRepository: "owner/repository", SessionSecret: "session-secret", PluginToken: "plugin-token-value-with-at-least-32-characters", MeshLoginKey: strings.Repeat("a", 160), Database: Database{Host: "127.0.0.1", Port: 5432, User: "deskpatrol", Name: "deskpatrol", SSLMode: "require"}}
+	return Config{Listen: "127.0.0.1:18123", PublicURL: "https://monitor.example.com", AgentPublicPort: 8443, StorageDir: "/var/lib/deskpatrol", GitHubRepository: "owner/repository", SessionSecret: "session-secret", PluginToken: "plugin-token-value-with-at-least-32-characters", MeshLoginKey: strings.Repeat("a", MeshLoginKeySize), Database: Database{Host: "127.0.0.1", Port: 5432, User: "deskpatrol", Name: "deskpatrol", SSLMode: "require"}}
 }
 
 func TestValidateRejectsNonHTTPSPublicURL(t *testing.T) {
@@ -16,6 +16,16 @@ func TestValidateRejectsNonHTTPSPublicURL(t *testing.T) {
 	cfg.PublicURL = "http://monitor.example.com"
 	if err := Validate(cfg); err == nil {
 		t.Fatal("应拒绝非 HTTPS 公网地址")
+	}
+}
+
+func TestNewMeshLoginKeyFitsMeshCentralLimit(t *testing.T) {
+	key, err := NewMeshLoginKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(key) != MeshLoginKeySize || len(key) > 128 {
+		t.Fatalf("MeshCentral 登录密钥长度不正确: %d", len(key))
 	}
 }
 

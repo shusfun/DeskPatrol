@@ -15,6 +15,7 @@ import (
 const (
 	DefaultConfigPath = "var/config.json"
 	InstallLockName   = ".installed"
+	MeshLoginKeySize  = 96
 )
 
 type Database struct {
@@ -89,7 +90,7 @@ func Validate(cfg Config) error {
 	if strings.TrimSpace(cfg.SessionSecret) == "" {
 		return errors.New("会话密钥不能为空")
 	}
-	if len(cfg.PluginToken) < 32 || len(cfg.MeshLoginKey) != 160 {
+	if len(cfg.PluginToken) < 32 || len(cfg.MeshLoginKey) != MeshLoginKeySize {
 		return errors.New("MeshCentral 内部凭据不完整")
 	}
 	if strings.TrimSpace(cfg.Database.Host) == "" || cfg.Database.Port < 1 || cfg.Database.Port > 65535 || strings.TrimSpace(cfg.Database.User) == "" || strings.TrimSpace(cfg.Database.Name) == "" {
@@ -114,7 +115,7 @@ func NewRandomSecret(size int) (string, error) {
 }
 
 func NewMeshLoginKey() (string, error) {
-	value := make([]byte, 80)
+	value := make([]byte, MeshLoginKeySize/2)
 	if _, err := rand.Read(value); err != nil {
 		return "", fmt.Errorf("生成 MeshCentral 登录密钥失败: %w", err)
 	}

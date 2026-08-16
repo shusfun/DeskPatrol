@@ -28,6 +28,7 @@ func WriteConfig(path string, input ConfigInput) error {
 	value := map[string]any{
 		"settings": map[string]any{
 			"cert":                    publicURL.Hostname(),
+			"autoBackup":              false,
 			"port":                    18129,
 			"portBind":                "127.0.0.1",
 			"aliasPort":               443,
