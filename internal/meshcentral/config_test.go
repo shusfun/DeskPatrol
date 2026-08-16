@@ -25,8 +25,12 @@ func TestWriteConfigPinsSecurityAndDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := value["settings"].(map[string]any)
-	if settings["selfUpdate"] != false || settings["noAgentUpdate"] != float64(1) || settings["autoBackup"] != false || settings["agentAliasDNS"] != "monitor.example.com" || settings["tlsOffload"] != "127.0.0.1" {
+	if settings["selfUpdate"] != false || settings["noAgentUpdate"] != float64(1) || settings["autoBackup"] != false || settings["loginCookieEncryptionKey"] != input.LoginKey || settings["agentAliasDNS"] != "monitor.example.com" || settings["tlsOffload"] != "127.0.0.1" {
 		t.Fatalf("MeshCentral 安全配置不正确: %#v", settings)
+	}
+	domain := value["domains"].(map[string]any)[""].(map[string]any)
+	if _, exists := domain["loginKey"]; exists {
+		t.Fatal("MeshCentral 域 loginKey 是页面访问门槛，不得用于 meshctrl 内部认证")
 	}
 	if settings["datapath"] != "/var/lib/deskpatrol/meshcentral" {
 		t.Fatalf("MeshCentral 数据目录不正确: %#v", settings["datapath"])

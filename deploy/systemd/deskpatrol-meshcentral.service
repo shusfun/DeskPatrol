@@ -12,6 +12,7 @@ Group=deskpatrol
 WorkingDirectory=/opt/deskpatrol/current/meshcentral
 Environment=NODE_ENV=production
 EnvironmentFile=/etc/deskpatrol/meshcentral.env
+ExecStartPre=/opt/deskpatrol/current/deploy/systemd/bootstrap-meshcentral.sh
 ExecStart=/opt/deskpatrol/current/node/bin/node /opt/deskpatrol/current/meshcentral/node_modules/meshcentral/meshcentral.js --configfile /etc/deskpatrol/meshcentral-config.json
 Restart=on-failure
 RestartSec=15

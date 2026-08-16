@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"deskpatrol/internal/appconfig"
 )
 
 const (
@@ -195,7 +197,7 @@ func (c *Controller) runMeshCtrl(ctx context.Context, args ...string) (string, e
 }
 
 func (c *Controller) runMeshCtrlIn(ctx context.Context, directory string, args ...string) (string, error) {
-	if len(c.LoginKey) != 160 {
+	if len(c.LoginKey) != appconfig.MeshLoginKeySize {
 		return "", errors.New("MeshCentral 登录密钥不正确")
 	}
 	if _, err := os.Stat(c.NodePath); err != nil {

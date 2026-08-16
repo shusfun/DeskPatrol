@@ -19,12 +19,12 @@ func TestValidateRejectsNonHTTPSPublicURL(t *testing.T) {
 	}
 }
 
-func TestNewMeshLoginKeyFitsMeshCentralLimit(t *testing.T) {
+func TestNewMeshLoginKeyMatchesMeshCtrlEncryptionKeySize(t *testing.T) {
 	key, err := NewMeshLoginKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(key) != MeshLoginKeySize || len(key) > 128 {
+	if len(key) != MeshLoginKeySize {
 		t.Fatalf("MeshCentral 登录密钥长度不正确: %d", len(key))
 	}
 }

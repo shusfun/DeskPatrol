@@ -15,7 +15,7 @@ import (
 const (
 	DefaultConfigPath = "var/config.json"
 	InstallLockName   = ".installed"
-	MeshLoginKeySize  = 96
+	MeshLoginKeySize  = 160
 )
 
 type Database struct {
