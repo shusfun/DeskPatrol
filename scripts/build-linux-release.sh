@@ -33,11 +33,10 @@ mkdir -p "$stage/bin" "$stage/web" "$stage/node" "$stage/meshcentral/node_module
 
 cd "$repo_root"
 pnpm --filter @deskpatrol/admin build
-pnpm --filter @deskpatrol/meshcentral-plugin deploy --prod --legacy "$stage/meshcentral"
+pnpm --filter @deskpatrol/meshcentral-plugin deploy --prod --legacy "$stage/integrations/deskpatrol"
 GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X deskpatrol/internal/buildinfo.Version=$version" -o "$stage/bin/deskpatrol-server" ./cmd/server
 cp -R frontend/apps/admin/dist "$stage/web/admin"
 cp -R deploy "$stage/deploy"
-cp -R integrations "$stage/integrations"
 
 node_archive="node-v${node_version}-linux-${node_arch}.tar.xz"
 node_base="https://npmmirror.com/mirrors/node/v${node_version}"

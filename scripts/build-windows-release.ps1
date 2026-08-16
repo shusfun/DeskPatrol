@@ -8,12 +8,10 @@ $env:GOSUMDB = 'sum.golang.google.cn'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-pnpm.cmd --filter '@deskpatrol/client' build
-if ($LASTEXITCODE -ne 0) { throw "客户端前端构建失败，exit=$LASTEXITCODE" }
-
 $assets = Join-Path $repoRoot 'cmd\client\assets'
 Get-ChildItem -LiteralPath $assets -Force | Where-Object { $_.Name -ne 'placeholder.txt' } | Remove-Item -Recurse -Force
-Copy-Item -Path (Join-Path $repoRoot 'frontend\apps\client\dist\*') -Destination $assets -Recurse -Force
+pnpm.cmd --filter '@deskpatrol/client' build
+if ($LASTEXITCODE -ne 0) { throw "客户端前端构建失败，exit=$LASTEXITCODE" }
 
 $stage = Join-Path $repoRoot "dist\windows\$Architecture\stage"
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
