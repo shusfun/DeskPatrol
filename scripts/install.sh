@@ -65,8 +65,8 @@ if ! id deskpatrol >/dev/null 2>&1; then
 fi
 chown -R deskpatrol:deskpatrol /etc/deskpatrol /var/lib/deskpatrol /var/log/deskpatrol
 install -d -o deskpatrol -g deskpatrol -m 0700 /var/lib/deskpatrol/meshcentral/plugins/deskpatrol
-install -o deskpatrol -g deskpatrol -m 0600 "$release_dir/integrations/deskpatrol/deskpatrol.js" /var/lib/deskpatrol/meshcentral/plugins/deskpatrol/deskpatrol.js
-install -o deskpatrol -g deskpatrol -m 0600 "$release_dir/integrations/deskpatrol/config.json" /var/lib/deskpatrol/meshcentral/plugins/deskpatrol/config.json
+cp -R "$release_dir/integrations/deskpatrol/." /var/lib/deskpatrol/meshcentral/plugins/deskpatrol/
+chown -R deskpatrol:deskpatrol /var/lib/deskpatrol/meshcentral/plugins/deskpatrol
 install -m 0644 "$release_dir/deploy/systemd/deskpatrol.service" /etc/systemd/system/deskpatrol.service
 install -m 0644 "$release_dir/deploy/systemd/deskpatrol-meshcentral.service" /etc/systemd/system/deskpatrol-meshcentral.service
 install -m 0644 "$release_dir/deploy/systemd/deskpatrol-meshcentral.path" /etc/systemd/system/deskpatrol-meshcentral.path
