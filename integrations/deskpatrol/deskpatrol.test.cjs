@@ -40,6 +40,16 @@ test("Linux 安装脚本在启动 MeshCentral 前创建全部可写目录", () =
   assert.ok(directorySetup < serviceStart);
 });
 
+test("MeshCentral systemd 服务在启动前引导内部管理员", () => {
+  const unit = fs.readFileSync(path.resolve(__dirname, "../../deploy/systemd/deskpatrol-meshcentral.service"), "utf8");
+  const bootstrap = fs.readFileSync(path.resolve(__dirname, "../../deploy/systemd/bootstrap-meshcentral.sh"), "utf8");
+  assert.match(unit, /^ExecStartPre=.*bootstrap-meshcentral\.sh$/m);
+  assert.match(bootstrap, /--createaccount admin/);
+  assert.match(bootstrap, /--adminaccount admin/);
+  assert.match(bootstrap, /password=.*randomBytes\(32\)/);
+  assert.match(bootstrap, /--pass "\$password"/);
+});
+
 test("Linux Release 在 MeshCentral 父级预装动态运行依赖", () => {
   const buildScript = fs.readFileSync(path.resolve(__dirname, "../../scripts/build-linux-release.sh"), "utf8");
   assert.match(buildScript, /--prefix "\$stage\/meshcentral" install/);
