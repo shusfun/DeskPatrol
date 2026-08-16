@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"deskpatrol/internal/appconfig"
 )
 
 func TestWriteConfigPinsSecurityAndDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	input := ConfigInput{PublicURL: "https://monitor.example.com", AgentPublicPort: 8443, StorageDir: "/var/lib/deskpatrol", DatabaseHost: "127.0.0.1", DatabasePort: 5432, DatabaseUser: "deskpatrol", DatabasePass: "secret", DatabaseName: "deskpatrol", LoginKey: strings.Repeat("a", 160)}
+	input := ConfigInput{PublicURL: "https://monitor.example.com", AgentPublicPort: 8443, StorageDir: "/var/lib/deskpatrol", DatabaseHost: "127.0.0.1", DatabasePort: 5432, DatabaseUser: "deskpatrol", DatabasePass: "secret", DatabaseName: "deskpatrol", LoginKey: strings.Repeat("a", appconfig.MeshLoginKeySize)}
 	if err := WriteConfig(path, input); err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +25,7 @@ func TestWriteConfigPinsSecurityAndDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := value["settings"].(map[string]any)
-	if settings["selfUpdate"] != false || settings["noAgentUpdate"] != float64(1) || settings["agentAliasDNS"] != "monitor.example.com" || settings["tlsOffload"] != "127.0.0.1" {
+	if settings["selfUpdate"] != false || settings["noAgentUpdate"] != float64(1) || settings["autoBackup"] != false || settings["agentAliasDNS"] != "monitor.example.com" || settings["tlsOffload"] != "127.0.0.1" {
 		t.Fatalf("MeshCentral 安全配置不正确: %#v", settings)
 	}
 	if settings["datapath"] != "/var/lib/deskpatrol/meshcentral" {

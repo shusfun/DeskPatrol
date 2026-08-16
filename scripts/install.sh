@@ -64,7 +64,10 @@ if ! id deskpatrol >/dev/null 2>&1; then
   useradd --system --home /var/lib/deskpatrol --shell /usr/sbin/nologin deskpatrol
 fi
 chown -R deskpatrol:deskpatrol /etc/deskpatrol /var/lib/deskpatrol /var/log/deskpatrol
-install -d -o deskpatrol -g deskpatrol -m 0700 /var/lib/deskpatrol/meshcentral/plugins/deskpatrol
+install -d -o deskpatrol -g deskpatrol -m 0700 \
+  /var/lib/deskpatrol/meshcentral \
+  /var/lib/deskpatrol/meshcentral-files \
+  /var/lib/deskpatrol/meshcentral/plugins/deskpatrol
 cp -R "$release_dir/integrations/deskpatrol/." /var/lib/deskpatrol/meshcentral/plugins/deskpatrol/
 chown -R deskpatrol:deskpatrol /var/lib/deskpatrol/meshcentral/plugins/deskpatrol
 install -m 0644 "$release_dir/deploy/systemd/deskpatrol.service" /etc/systemd/system/deskpatrol.service

@@ -29,7 +29,7 @@ esac
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "$work_dir"' EXIT
 stage="$work_dir/deskpatrol"
-mkdir -p "$stage/bin" "$stage/web" "$stage/node" "$stage/meshcentral/node_modules/meshcentral"
+mkdir -p "$stage/bin" "$stage/web" "$stage/node" "$stage/meshcentral"
 
 cd "$repo_root"
 pnpm --filter @deskpatrol/admin build
@@ -50,9 +50,14 @@ if [[ -z "$expected_node_sha" || "$expected_node_sha" != "$actual_node_sha" ]]; 
 fi
 tar -xJf "$work_dir/$node_archive" -C "$stage/node" --strip-components=1
 
+npm_config_platform=linux npm_config_arch="$node_arch" npm --prefix "$stage/meshcentral" install --no-save --no-package-lock --omit=optional --ignore-scripts --registry=https://registry.npmmirror.com --replace-registry-host=always \
+  ua-client-hints-js@0.1.2 image-size@2.0.2 pg@8.16.3 otplib@13.4.1
 node scripts/fetch-meshcentral.mjs "$work_dir/meshcentral-1.2.5.tar.gz"
+mkdir -p "$stage/meshcentral/node_modules/meshcentral"
 tar -xzf "$work_dir/meshcentral-1.2.5.tar.gz" -C "$stage/meshcentral/node_modules/meshcentral" --strip-components=1
 npm_config_platform=linux npm_config_arch="$node_arch" npm --prefix "$stage/meshcentral/node_modules/meshcentral" ci --omit=dev --ignore-scripts --registry=https://registry.npmmirror.com --replace-registry-host=always
+node -e 'const { createRequire } = require("node:module"); const requireFromMeshCentral = createRequire(process.argv[1]); for (const moduleName of ["ua-client-hints-js", "image-size", "pg", "otplib"]) { requireFromMeshCentral.resolve(moduleName); }' \
+  "$stage/meshcentral/node_modules/meshcentral/meshcentral.js"
 
 mkdir -p "$repo_root/dist/linux/$architecture"
 tar -czf "$repo_root/dist/linux/$architecture/deskpatrol-linux-$architecture-$version.tar.gz" -C "$work_dir" deskpatrol
