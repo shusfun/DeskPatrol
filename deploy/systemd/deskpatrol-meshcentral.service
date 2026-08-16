@@ -1,0 +1,26 @@
+[Unit]
+Description=DeskPatrol MeshCentral 1.2.5
+After=network-online.target postgresql.service
+Wants=network-online.target
+ConditionPathExists=/etc/deskpatrol/meshcentral-config.json
+ConditionPathExists=/etc/deskpatrol/meshcentral.env
+
+[Service]
+Type=simple
+User=deskpatrol
+Group=deskpatrol
+WorkingDirectory=/opt/deskpatrol/current/meshcentral
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/deskpatrol/meshcentral.env
+ExecStart=/opt/deskpatrol/current/node/bin/node /opt/deskpatrol/current/meshcentral/node_modules/meshcentral/meshcentral.js --configfile /etc/deskpatrol/meshcentral-config.json
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/deskpatrol/meshcentral /var/lib/deskpatrol/meshcentral-files /var/log/deskpatrol
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

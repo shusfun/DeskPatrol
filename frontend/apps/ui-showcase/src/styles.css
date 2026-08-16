@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@import "../../../tailwind.theme.css";
+@source "../../../packages/ui-admin/src";
+
+body { margin: 0; background: hsl(var(--background)); }
+main { width: min(920px, calc(100% - 32px)); margin: 36px auto; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+header span { color: hsl(var(--primary)); font-size: 12px; font-weight: 750; }
+h1 { margin: 5px 0 0; font-size: 25px; }
+section { padding: 20px 0; border-top: 1px solid hsl(var(--border)); }
+h2 { margin: 0 0 14px; font-size: 15px; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+section:last-child { background: hsl(var(--card)); }
+.token-swatches { display: flex; gap: 10px; }
+.token-swatches i { width: 46px; height: 34px; border: 1px solid hsl(var(--border)); border-radius: var(--radius-control); box-shadow: var(--shadow-card); }
+.token-primary { background: hsl(var(--primary)); }.token-accent { background: hsl(var(--accent)); }.token-success { background: hsl(var(--success)); }.token-warning { background: hsl(var(--warning)); }.token-destructive { background: hsl(var(--destructive)); }

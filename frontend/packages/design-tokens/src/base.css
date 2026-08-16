@@ -1,0 +1,42 @@
+/* 结构 Token 不承载业务状态，用于统一组件形状、阴影和字体。 */
+:root {
+  --radius: 1rem;
+  --shape-radius-sm: 0.875rem;
+  --shape-radius-md: 1.125rem;
+  --shape-radius-lg: 1.75rem;
+  --shape-radius-control: 0.625rem;
+  --shape-radius-surface: 0.5rem;
+  --shape-radius-overlay: 0.75rem;
+  --radius-sm: var(--shape-radius-sm);
+  --radius-md: var(--shape-radius-md);
+  --radius-lg: var(--shape-radius-lg);
+  --radius-control: var(--shape-radius-control);
+  --radius-surface: var(--shape-radius-surface);
+  --radius-overlay: var(--shape-radius-overlay);
+  --elevation-shadow-soft: 0 18px 44px rgba(15, 23, 42, 0.08);
+  --elevation-shadow-card: 0 12px 30px rgba(15, 23, 42, 0.05);
+  --shadow-soft: var(--elevation-shadow-soft);
+  --shadow-card: var(--elevation-shadow-card);
+  --shadow-float: var(--shadow-soft);
+  --typography-font-sans: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --typography-font-display: var(--typography-font-sans);
+  --font-sans: var(--typography-font-sans);
+  --font-display: var(--typography-font-display);
+}
+
+html,
+body,
+#root { min-height: 100%; }
+body {
+  margin: 0;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+}
+* { box-sizing: border-box; }
+a { color: inherit; text-decoration: none; }
+button,
+input,
+textarea,
+select { font: inherit; }

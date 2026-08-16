@@ -1,0 +1,9 @@
+{
+  "name": "@deskpatrol/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "vite build", "dev": "vite --host 127.0.0.1 --port 18127", "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": { "@deskpatrol/design-tokens": "workspace:*", "@deskpatrol/icons": "workspace:*", "@deskpatrol/ui-admin": "workspace:*", "react": "catalog:", "react-dom": "catalog:" },
+  "devDependencies": { "@types/react": "catalog:", "@types/react-dom": "catalog:", "typescript": "catalog:", "vite": "catalog:" }
+}

@@ -1,0 +1,18 @@
+{
+  "listen": "127.0.0.1:18123",
+  "publicUrl": "https://deskpatrol.example.com",
+  "agentPublicPort": 8443,
+  "storageDir": "/var/lib/deskpatrol",
+  "githubRepository": "owner/deskpatrol",
+  "sessionSecret": "generated-by-setup-session-secret-value",
+  "pluginToken": "generated-by-setup-plugin-token-value",
+  "meshLoginKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "deskpatrol",
+    "password": "",
+    "name": "deskpatrol",
+    "sslMode": "disable"
+  }
+}

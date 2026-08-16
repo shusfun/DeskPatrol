@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "activeBuildScripts": [
+    "tools/repo-cli/src/index.mjs",
+    "scripts/install.sh",
+    "scripts/build-linux-release.sh",
+    "scripts/build-windows-release.ps1",
+    "scripts/fetch-meshcentral.mjs",
+    "scripts/generate-license-manifest.mjs",
+    "scripts/release.mjs"
+  ],
+  "exceptions": []
+}

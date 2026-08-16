@@ -1,0 +1,24 @@
+[Unit]
+Description=DeskPatrol Server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deskpatrol
+Group=deskpatrol
+WorkingDirectory=/opt/deskpatrol/current
+ExecStart=/opt/deskpatrol/current/bin/deskpatrol-server --config /etc/deskpatrol/config.json --assets /opt/deskpatrol/current/web/admin --log /var/log/deskpatrol/server.log --pid /run/deskpatrol/server.pid
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=deskpatrol
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/deskpatrol /var/log/deskpatrol /etc/deskpatrol
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
