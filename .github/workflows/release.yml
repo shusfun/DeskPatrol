@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: 1.26.1
+  NODE_VERSION: 22.22.0
+  PNPM_VERSION: 10.32.1
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: deskpatrol
+          POSTGRES_PASSWORD: deskpatrol-test-password
+          POSTGRES_DB: deskpatrol_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U deskpatrol -d deskpatrol_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DESKPATROL_TEST_DATABASE_URL: postgres://deskpatrol:deskpatrol-test-password@127.0.0.1:5432/deskpatrol_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}', cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - run: corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+      - run: pnpm install --frozen-lockfile --child-concurrency=2
+      - run: pnpm run repo -- verify all
+      - run: node --test integrations/deskpatrol/deskpatrol.test.cjs
+
+  windows:
+    needs: verify
+    runs-on: windows-latest
+    strategy:
+      matrix: { architecture: [amd64, arm64] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}', cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - shell: pwsh
+        run: corepack enable; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; corepack prepare pnpm@${env:PNPM_VERSION} --activate; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - shell: pwsh
+        run: pnpm.cmd install --frozen-lockfile --child-concurrency=2; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - shell: pwsh
+        run: ./scripts/build-windows-release.ps1 -Architecture '${{ matrix.architecture }}' -Version '${{ inputs.version }}'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.architecture }}
+          path: dist/windows/${{ matrix.architecture }}/DeskPatrol-${{ inputs.version }}-windows-${{ matrix.architecture }}.exe
+
+  linux:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { architecture: [amd64, arm64] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}', cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - run: corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+      - run: pnpm install --frozen-lockfile --child-concurrency=2
+      - run: ./scripts/build-linux-release.sh '${{ matrix.architecture }}' '${{ inputs.version }}'
+        env:
+          MESHCENTRAL_SHA256: '${{ secrets.MESHCENTRAL_SHA256 }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.architecture }}
+          path: dist/linux/${{ matrix.architecture }}/deskpatrol-linux-${{ matrix.architecture }}-${{ inputs.version }}.tar.gz
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - uses: actions/setup-go@v5
+        with: { go-version: '${{ env.GO_VERSION }}', cache: true }
+      - run: corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+      - run: pnpm install --frozen-lockfile --child-concurrency=2
+      - uses: actions/download-artifact@v4
+        with: { pattern: '*-*', path: dist, merge-multiple: true }
+      - run: mkdir -p dist/linux/amd64 dist/linux/arm64 dist/windows/amd64 dist/windows/arm64
+      - run: mv "dist/deskpatrol-linux-amd64-${{ inputs.version }}.tar.gz" dist/linux/amd64/
+      - run: mv "dist/deskpatrol-linux-arm64-${{ inputs.version }}.tar.gz" dist/linux/arm64/
+      - run: mv "dist/DeskPatrol-${{ inputs.version }}-windows-amd64.exe" dist/windows/amd64/
+      - run: mv "dist/DeskPatrol-${{ inputs.version }}-windows-arm64.exe" dist/windows/arm64/
+      - run: node scripts/release.mjs prepare --version '${{ inputs.version }}'
+        env: { GITHUB_REPOSITORY: '${{ github.repository }}' }
+      - run: node scripts/release.mjs verify --version '${{ inputs.version }}'
+        env: { GITHUB_REPOSITORY: '${{ github.repository }}' }
+      - run: gh release create "v${{ inputs.version }}" dist/releases/${{ inputs.version }}/* --title "DeskPatrol v${{ inputs.version }}" --generate-notes
+        env: { GH_TOKEN: '${{ github.token }}' }

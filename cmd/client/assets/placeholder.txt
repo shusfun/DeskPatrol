@@ -1,0 +1,1 @@
+DeskPatrol 客户端前端资源由 `pnpm --filter @deskpatrol/client build` 生成。

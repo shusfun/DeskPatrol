@@ -1,0 +1,9 @@
+[Unit]
+Description=DeskPatrol MeshCentral Setup 配置监视
+
+[Path]
+PathExists=/etc/deskpatrol/meshcentral.env
+Unit=deskpatrol-meshcentral.service
+
+[Install]
+WantedBy=multi-user.target

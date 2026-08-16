@@ -1,0 +1,10 @@
+node_modules/
+dist/
+frontend/apps/*/dist/
+var/
+coverage/
+*.log
+.DS_Store
+cmd/client/frontend/dist/
+cmd/client/assets/*
+!cmd/client/assets/placeholder.txt

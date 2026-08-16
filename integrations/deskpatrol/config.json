@@ -1,0 +1,13 @@
+{
+  "name": "DeskPatrol Integration",
+  "shortName": "deskpatrol",
+  "version": "0.1.0",
+  "description": "DeskPatrol 与 MeshCentral 1.2.5 的固定版本适配层",
+  "hasAdminPanel": false,
+  "homepage": "https://github.com/deskpatrol/deskpatrol",
+  "changelogUrl": "https://github.com/deskpatrol/deskpatrol/releases",
+  "configUrl": "https://github.com/deskpatrol/deskpatrol/raw/main/integrations/deskpatrol/config.json",
+  "repository": { "type": "git", "url": "https://github.com/deskpatrol/deskpatrol.git" },
+  "downloadUrl": "https://github.com/deskpatrol/deskpatrol/archive/refs/heads/main.zip",
+  "meshCentralCompat": ">=1.2.5"
+}

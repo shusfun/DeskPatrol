@@ -1,0 +1,44 @@
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-lg: var(--shape-radius-lg);
+  --radius-md: var(--shape-radius-md);
+  --radius-sm: var(--shape-radius-sm);
+  --radius-control: var(--shape-radius-control);
+  --radius-surface: var(--shape-radius-surface);
+  --radius-overlay: var(--shape-radius-overlay);
+  --shadow-card: var(--elevation-shadow-card);
+  --shadow-soft: var(--elevation-shadow-soft);
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-background: hsl(var(--background));
+  --color-border: hsl(var(--border));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-foreground: hsl(var(--foreground));
+  --color-info: hsl(var(--info));
+  --color-input: hsl(var(--input));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-ring: hsl(var(--ring));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --font-display: var(--typography-font-display);
+  --font-sans: var(--typography-font-sans);
+}
+
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button { border-color: hsl(var(--border)); }
+}
