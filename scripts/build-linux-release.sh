@@ -52,7 +52,7 @@ tar -xJf "$work_dir/$node_archive" -C "$stage/node" --strip-components=1
 
 node scripts/fetch-meshcentral.mjs "$work_dir/meshcentral-1.2.5.tar.gz"
 tar -xzf "$work_dir/meshcentral-1.2.5.tar.gz" -C "$stage/meshcentral/node_modules/meshcentral" --strip-components=1
-PATH="$stage/node/bin:$PATH" npm --prefix "$stage/meshcentral/node_modules/meshcentral" ci --omit=dev --ignore-scripts --registry=https://registry.npmmirror.com --replace-registry-host=always
+npm_config_platform=linux npm_config_arch="$node_arch" npm --prefix "$stage/meshcentral/node_modules/meshcentral" ci --omit=dev --ignore-scripts --registry=https://registry.npmmirror.com --replace-registry-host=always
 
 mkdir -p "$repo_root/dist/linux/$architecture"
 tar -czf "$repo_root/dist/linux/$architecture/deskpatrol-linux-$architecture-$version.tar.gz" -C "$work_dir" deskpatrol
