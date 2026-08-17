@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS activation_codes (
   created_by BIGINT NOT NULL REFERENCES administrators(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE TABLE IF NOT EXISTS deployment_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+WITH applied AS (
+  INSERT INTO deployment_migrations(name) VALUES('2026-08-17-connection-key') ON CONFLICT DO NOTHING RETURNING name
+)
+DELETE FROM activation_codes WHERE used_at IS NULL AND EXISTS (SELECT 1 FROM applied);
 CREATE TABLE IF NOT EXISTS devices (
   id UUID PRIMARY KEY,
   installation_id TEXT NOT NULL UNIQUE,
