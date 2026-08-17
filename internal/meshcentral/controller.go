@@ -29,8 +29,8 @@ const (
 	maxCommandResponse  = 600 << 10
 )
 
-var meshIDPattern = regexp.MustCompile(`mesh/[A-Za-z0-9_+/@=-]+`)
-var agentDownloadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_+@=-]{64}$`)
+var meshIDPattern = regexp.MustCompile(`mesh/[A-Za-z0-9_+/$@=-]+`)
+var agentDownloadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_+$@=-]{64}$`)
 var sharingURLPattern = regexp.MustCompile(`(?m)^URL:\s+(https://[^\s]+/sharing\?[^\s]+)\s*$`)
 
 type Controller struct {

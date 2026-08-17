@@ -56,15 +56,23 @@ func TestDesktopShareURLPatternMatchesPinnedMeshCtrlOutput(t *testing.T) {
 	}
 }
 
+func TestMeshIDPatternMatchesPinnedMeshCtrlDollarOutput(t *testing.T) {
+	raw := "xdY7fXe1kE0l$Ew6YQLKoSSxVSMJTWJS8e@xYFTz2EB6SH0g1OY@PQk1d2jTwI8K"
+	output := "ok mesh//" + raw
+	if value := meshIDPattern.FindString(output); value != "mesh//"+raw {
+		t.Fatalf("MeshID 解析失败: %q", value)
+	}
+}
+
 func TestAgentDownloadIDUsesRawMeshIdentifier(t *testing.T) {
-	raw := strings.Repeat("a", 64)
+	raw := "xdY7fXe1kE0l$Ew6YQLKoSSxVSMJTWJS8e@xYFTz2EB6SH0g1OY@PQk1d2jTwI8K"
 	for _, meshID := range []string{"mesh//" + raw, "mesh/domain/" + raw} {
 		value, err := agentDownloadID(meshID)
 		if err != nil || value != raw {
 			t.Fatalf("AgentDownload ID 转换失败: meshID=%q value=%q err=%v", meshID, value, err)
 		}
 	}
-	for _, meshID := range []string{"", "mesh//short", "mesh//" + strings.Repeat("/", 64), "node//" + raw} {
+	for _, meshID := range []string{"", "mesh//short", "mesh//" + strings.Repeat("/", 64), "mesh//" + strings.Repeat(".", 64), "node//" + raw} {
 		if _, err := agentDownloadID(meshID); err == nil {
 			t.Fatalf("错误 MeshID 必须被拒绝: %q", meshID)
 		}
