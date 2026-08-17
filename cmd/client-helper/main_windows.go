@@ -68,6 +68,9 @@ func install(downloadURL, expectedSHA string) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	response, err := (&http.Client{}).Do(req)
 	if err != nil {
+		if urlError, ok := err.(*url.Error); ok {
+			err = urlError.Err
+		}
 		return fmt.Errorf("下载 MeshAgent 失败: %w", err)
 	}
 	defer response.Body.Close()

@@ -1,12 +1,16 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,5 +84,27 @@ func TestDebugAuthStoresOnlyBearerTokenDigest(t *testing.T) {
 	}
 	if stored != hash("plain-debug-token") || stored == "plain-debug-token" {
 		t.Fatalf("诊断认证上下文必须只保存口令摘要，得到 %q", stored)
+	}
+}
+
+func TestValidateEnrollmentFileChecksSizeAndDigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "MeshAgent.exe")
+	raw := make([]byte, 2048)
+	for index := range raw {
+		raw[index] = byte(index % 251)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	valid, err := validateEnrollmentFile(path, hex.EncodeToString(digest[:]), int64(len(raw)))
+	if err != nil || !valid {
+		t.Fatalf("有效 Agent 缓存未通过校验: valid=%v err=%v", valid, err)
+	}
+	if valid, err := validateEnrollmentFile(path, strings.Repeat("0", 64), int64(len(raw))); err != nil || valid {
+		t.Fatalf("错误摘要必须被拒绝: valid=%v err=%v", valid, err)
+	}
+	if valid, err := validateEnrollmentFile(path, hex.EncodeToString(digest[:]), int64(len(raw)+1)); err != nil || valid {
+		t.Fatalf("错误大小必须被拒绝: valid=%v err=%v", valid, err)
 	}
 }
