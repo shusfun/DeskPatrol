@@ -134,7 +134,15 @@ BEGIN
   END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_node_id_active ON devices(node_id) WHERE node_id IS NOT NULL AND deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_mesh_id_active ON devices(mesh_id) WHERE mesh_id IS NOT NULL AND deleted_at IS NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM deployment_migrations WHERE name = '2026-08-17-mesh-id-many-to-one') THEN
+    ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_mesh_id_key;
+    DROP INDEX IF EXISTS idx_devices_mesh_id;
+    DROP INDEX IF EXISTS idx_devices_mesh_id_active;
+    INSERT INTO deployment_migrations(name) VALUES('2026-08-17-mesh-id-many-to-one');
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_client_token ON devices(client_token_hash) WHERE client_token_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS wall_layouts (
   administrator_id BIGINT PRIMARY KEY REFERENCES administrators(id) ON DELETE CASCADE,
