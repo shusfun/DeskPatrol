@@ -1,6 +1,9 @@
 package credentialcrypto
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
 
 func TestCipherRequiresMatchingAssociatedData(t *testing.T) {
 	cipher, err := New("session-secret")
@@ -29,11 +32,12 @@ func TestCipherRejectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacement := byte('A')
-	if ciphertext[len(ciphertext)-1] == replacement {
-		replacement = 'B'
+	raw, err := base64.RawStdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		t.Fatal(err)
 	}
-	tampered := ciphertext[:len(ciphertext)-1] + string(replacement)
+	raw[len(raw)-1] ^= 0x01
+	tampered := base64.RawStdEncoding.EncodeToString(raw)
 	if _, err := cipher.Decrypt(tampered, []byte("activation-code:id-1")); err == nil {
 		t.Fatal("被篡改的密文必须拒绝解密")
 	}
