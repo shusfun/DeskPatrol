@@ -20,6 +20,7 @@ import (
 
 	"deskpatrol/internal/appconfig"
 	"deskpatrol/internal/buildinfo"
+	"deskpatrol/internal/connectionkey"
 	"deskpatrol/internal/database"
 	"deskpatrol/internal/meshcentral"
 	"deskpatrol/internal/releasesync"
@@ -125,6 +126,9 @@ func (a *App) reload(ctx context.Context) error {
 	a.mu.Unlock()
 	if old != nil {
 		old.Close()
+	}
+	if err := a.releases.RetainLatest(ctx); err != nil {
+		return fmt.Errorf("收口 Release 缓存失败: %w", err)
 	}
 	return nil
 }
@@ -572,12 +576,17 @@ func (a *App) createActivationCode(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid()
 	expires := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
 	user := r.Context().Value(principalKey).(principal)
-	_, pool, _ := a.snapshot()
+	cfg, pool, _ := a.snapshot()
+	connectionKey, err := connectionkey.Build(cfg.PublicURL, code)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("生成连接密钥失败: %w", err))
+		return
+	}
 	if _, err := pool.Exec(r.Context(), `INSERT INTO activation_codes(id,code_hash,label,expires_at,created_by) VALUES($1,$2,$3,$4,$5)`, id, hash(code), strings.TrimSpace(req.Label), expires, user.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "code": code, "expiresAt": expires})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "connectionKey": connectionKey, "expiresAt": expires})
 }
 
 func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
@@ -852,7 +861,7 @@ func (a *App) listDownloads(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listReleaseJobs(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,version,status,progress,total,error_message,created_at,updated_at FROM release_jobs ORDER BY created_at DESC LIMIT 50`)
+	rows, err := pool.Query(r.Context(), `SELECT id,version,status,progress,total,error_message,created_at,updated_at FROM release_jobs ORDER BY created_at DESC LIMIT 1`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

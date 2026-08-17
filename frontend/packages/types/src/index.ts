@@ -32,7 +32,7 @@ export type Device = {
 };
 export type WallLayout = { tileCount: 1 | 4 | 9 | 16; deviceOrder: string[] };
 export type ActivationCode = { id: string; label: string; expiresAt: string; usedAt?: string; createdAt: string };
-export type ActivationCodeCreated = { id: string; code: string; expiresAt: string };
+export type ActivationCodeCreated = { id: string; connectionKey: string; expiresAt: string };
 export type DownloadArtifact = { filename: string; version: string; platform: string; architecture: string; size: number; sha256: string; status: string; createdAt: string };
 export type ReleaseJob = { id: string; version: string; status: "queued" | "downloading" | "ready" | "failed"; progress: number; total: number; error: string; createdAt: string; updatedAt: string };
 export type DebugSession = { id: string; deviceId: string; token: string; expiresAt: string; status: "active" };

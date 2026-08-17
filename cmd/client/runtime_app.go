@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"deskpatrol/internal/buildinfo"
+	"deskpatrol/internal/connectionkey"
 	"deskpatrol/internal/runtimelog"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -43,8 +43,7 @@ type RuntimeStatus struct {
 }
 
 type ActivationInput struct {
-	ServerURL      string `json:"serverUrl"`
-	ActivationCode string `json:"activationCode"`
+	ConnectionKey string `json:"connectionKey"`
 }
 
 func NewRuntimeApp() (*RuntimeApp, error) {
@@ -167,24 +166,20 @@ func (a *RuntimeApp) ReportFrontendError(raw string) error {
 }
 
 func (a *RuntimeApp) Activate(input ActivationInput) (RuntimeStatus, error) {
-	serverURL, err := normalizeServerURL(input.ServerURL)
+	connection, err := connectionkey.Parse(input.ConnectionKey)
 	if err != nil {
 		return a.Status(), err
-	}
-	code := strings.TrimSpace(input.ActivationCode)
-	if code == "" {
-		return a.Status(), errors.New("激活码不能为空")
 	}
 	installationID, err := a.store.InstallationID()
 	if err != nil {
 		return a.Status(), err
 	}
 	hostname, _ := os.Hostname()
-	payload := map[string]string{"code": code, "installationId": installationID, "architecture": runtime.GOARCH, "deviceName": hostname}
+	payload := map[string]string{"code": connection.ActivationCode, "installationId": installationID, "architecture": runtime.GOARCH, "deviceName": hostname}
 	raw, _ := json.Marshal(payload)
 	requestContext, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, serverURL+"/api/v1/client/activate", bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, connection.ServerURL+"/api/v1/client/activate", bytes.NewReader(raw))
 	if err != nil {
 		return a.Status(), err
 	}
@@ -218,10 +213,10 @@ func (a *RuntimeApp) Activate(input ActivationInput) (RuntimeStatus, error) {
 	if err := installMeshAgentElevated(envelope.Data.AgentDownloadURL, envelope.Data.AgentSHA256); err != nil {
 		return a.Status(), err
 	}
-	if err := a.store.Save(LocalState{ServerURL: serverURL, DeviceID: envelope.Data.DeviceID, DeviceName: envelope.Data.DeviceName, DeviceToken: envelope.Data.DeviceToken}); err != nil {
+	if err := a.store.Save(LocalState{ServerURL: connection.ServerURL, DeviceID: envelope.Data.DeviceID, DeviceName: envelope.Data.DeviceName, DeviceToken: envelope.Data.DeviceToken}); err != nil {
 		return a.Status(), err
 	}
-	a.logger.Info("runtime activated deviceId=%s server=%s", envelope.Data.DeviceID, serverURL)
+	a.logger.Info("runtime activated deviceId=%s server=%s", envelope.Data.DeviceID, connection.ServerURL)
 	go a.flushFrontendErrors()
 	return a.Status(), nil
 }
@@ -256,14 +251,6 @@ func (a *RuntimeApp) flushFrontendErrors() {
 	if err := a.store.ClearFrontendErrors(); err != nil {
 		a.logger.Error("runtime frontend error queue cleanup failed error=%s", err)
 	}
-}
-
-func normalizeServerURL(value string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("Linux 地址必须是无路径的 HTTPS 地址")
-	}
-	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 func firstNonEmpty(values ...string) string {

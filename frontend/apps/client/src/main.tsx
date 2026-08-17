@@ -18,7 +18,7 @@ type Status = { activated: boolean; serverUrl: string; deviceId: string; deviceN
 type LogEntry = { timestamp: string; level: "INFO" | "ERROR"; message: string };
 const bridge = {
   status: () => window.wails.Call.ByName<Status>("main.RuntimeApp.Status"),
-  activate: (serverUrl: string, activationCode: string) => window.wails.Call.ByName<Status>("main.RuntimeApp.Activate", { serverUrl, activationCode }),
+  activate: (connectionKey: string) => window.wails.Call.ByName<Status>("main.RuntimeApp.Activate", { connectionKey }),
   logs: () => window.wails.Call.ByName<LogEntry[]>("main.RuntimeApp.Logs", { limit: 50, level: "", contains: "" }),
   reportFrontendError: (value: unknown) => window.wails.Call.ByName<void>("main.RuntimeApp.ReportFrontendError", JSON.stringify(value)),
 };
@@ -48,9 +48,9 @@ function App() {
 }
 
 function Activation({ onActivated }: { onActivated: (status: Status) => void }) {
-  const [serverUrl, setServerUrl] = useState(""); const [activationCode, setActivationCode] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(""); try { onActivated(await bridge.activate(serverUrl, activationCode)); } catch (next) { setError(text(next)); } finally { setBusy(false); } };
-  return <main className="activation"><section><span className="eyebrow"><ShieldCheck />安全激活</span><h1>连接 DeskPatrol 服务</h1><p>输入 Linux 管理端 HTTPS 地址和管理员提供的一机一码。激活时会弹出一次系统权限确认。</p></section><form onSubmit={(event) => void submit(event)}><Field autoComplete="url" label="Linux 服务地址" placeholder="https://monitor.example.com" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} /><Field autoComplete="one-time-code" label="激活码" placeholder="XXXXXX-XXXXXX-XXXXXX-XXXXXX" value={activationCode} onChange={(event) => setActivationCode(event.target.value.toUpperCase())} />{error ? <p className="client-error">{error}</p> : null}<Button disabled={busy || !serverUrl || !activationCode} tone="primary" type="submit">{busy ? <><LoaderCircle className="spin" />正在激活</> : "激活设备"}</Button></form></main>;
+  const [connectionKey, setConnectionKey] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(""); try { onActivated(await bridge.activate(connectionKey)); } catch (next) { setError(text(next)); } finally { setBusy(false); } };
+  return <main className="activation"><section><span className="eyebrow"><ShieldCheck />安全激活</span><h1>连接 DeskPatrol 服务</h1><p>粘贴管理员提供的连接密钥。连接密钥已包含当前 Linux 服务地址，激活时会弹出一次系统权限确认。</p></section><form onSubmit={(event) => void submit(event)}><Field autoComplete="off" label="连接密钥" placeholder="dp-link. ..." value={connectionKey} onChange={(event) => setConnectionKey(event.target.value)} />{error ? <p className="client-error">{error}</p> : null}<Button disabled={busy || !connectionKey.trim()} tone="primary" type="submit">{busy ? <><LoaderCircle className="spin" />正在激活</> : "激活设备"}</Button></form></main>;
 }
 
 function Home({ status }: { status: Status }) { return <main className="client-home"><div className="status-hero"><span><Check /></span><div><h1>设备已激活</h1><p>{status.connection}</p></div><StatusBadge status="ok">运行正常</StatusBadge></div><dl><Row label="设备名称" value={status.deviceName} /><Row label="设备编号" value={status.deviceId} /><Row label="服务地址" value={status.serverUrl} /><Row label="MeshAgent" value={status.meshAgentStatus} /></dl></main>; }
