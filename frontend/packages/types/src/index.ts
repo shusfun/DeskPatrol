@@ -31,7 +31,8 @@ export type Device = {
   createdAt: string;
 };
 export type WallLayout = { tileCount: 1 | 4 | 9 | 16; deviceOrder: string[] };
-export type ActivationCode = { id: string; label: string; expiresAt: string; usedAt?: string; createdAt: string };
+export type ActivationCodeStatus = "unused" | "used" | "expired" | "superseded" | "revoked";
+export type ActivationCode = { id: string; label: string; expiresAt: string; usedAt?: string; createdAt: string; status: ActivationCodeStatus; canCopy: boolean };
 export type ActivationCodeCreated = { id: string; connectionKey: string; expiresAt: string };
 export type DownloadArtifact = { filename: string; version: string; platform: string; architecture: string; size: number; sha256: string; status: string; createdAt: string };
 export type ReleaseJob = { id: string; version: string; status: "queued" | "downloading" | "ready" | "failed"; progress: number; total: number; error: string; createdAt: string; updatedAt: string };

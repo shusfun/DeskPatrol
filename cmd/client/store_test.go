@@ -31,3 +31,25 @@ func TestFrontendErrorQueueKeepsLatestTwoHundredAndClears(t *testing.T) {
 		t.Fatalf("异常队列未清空: %d %v", len(items), err)
 	}
 }
+
+func TestClearStateDoesNotRemoveInstallationID(t *testing.T) {
+	store := &LocalStore{dir: t.TempDir()}
+	installationID, err := store.InstallationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(LocalState{DeviceID: "device-1", DeviceToken: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearState(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load()
+	if err != nil || state.DeviceID != "" {
+		t.Fatalf("本机状态未清除: %#v err=%v", state, err)
+	}
+	preserved, err := store.InstallationID()
+	if err != nil || preserved != installationID {
+		t.Fatalf("安装 ID 被错误清除: before=%s after=%s err=%v", installationID, preserved, err)
+	}
+}
