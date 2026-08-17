@@ -15,16 +15,25 @@ const original = `before
             case 2: // Mouse events, forward to agent
                 if (viewer.viewOnly == false) { obj.sendToAgent(data); }
                 break;
+            case 10: // CTRL-ALT-DEL, forward to agent
+                if (viewer.viewOnly == false) { obj.sendToAgent(data); }
+                break;
             case 12: // SET DISPLAY, forward to agent
                 if (viewer.viewOnly == false) { obj.sendToAgent(data); }
                 break;
             case 85: // Unicode Key Events, forward to agent
                 if (viewer.viewOnly == false) { obj.sendToAgent(data); }
                 break;
+            case 11: // GetDisplays
+                // Store and send this to all viewers right away
+                obj.lastDisplayInfoData = data;
+                obj.sendToAllInputViewers(data);
+                break;
 after`;
 
-test("只读补丁只改变 SetDisplay，并校验长度、物理屏幕与已知显示器", () => {
+test("只读补丁允许显示器查询，并校验 SetDisplay 的长度、物理屏幕与已知显示器", () => {
   const patched = patchMultiplexSource(original, originalMultiplexSha256);
+  assert.match(patched, /case 11: \/\/ GET DISPLAYS, read-only request allowed for view-only sessions[\s\S]*obj\.sendToAgent\(data\);/);
   assert.match(patched, /data\.length != 6/);
   assert.match(patched, /display == 65535/);
   assert.match(patched, /displayFound/);
@@ -32,11 +41,13 @@ test("只读补丁只改变 SetDisplay，并校验长度、物理屏幕与已知
   assert.match(patched, /case 1:[\s\S]*viewer\.viewOnly == false/);
   assert.match(patched, /case 2:[\s\S]*viewer\.viewOnly == false/);
   assert.match(patched, /case 85:[\s\S]*viewer\.viewOnly == false/);
+  assert.match(patched, /obj\.sendToAllViewers\(data\);/);
+  assert.doesNotMatch(patched, /case 11: \/\/ GetDisplays[\s\S]*obj\.sendToAllInputViewers\(data\);/);
 });
 
 test("原文件摘要或补丁上下文漂移时直接失败", () => {
   assert.throws(() => patchMultiplexSource(original, "0".repeat(64)), /SHA-256 不匹配/);
-  assert.throws(() => patchMultiplexSource("no context", originalMultiplexSha256), /上下文数量不正确/);
+  assert.throws(() => patchMultiplexSource("no context", originalMultiplexSha256), /显示器请求补丁上下文数量不正确/);
 });
 
 const originalMeshUser = `function cleanup(docs, now, parent) {

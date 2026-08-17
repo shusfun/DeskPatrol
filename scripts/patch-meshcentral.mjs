@@ -8,11 +8,20 @@ export const meshCentralVersion = "1.2.5";
 export const originalMultiplexSha256 = "b6d1c0c6b4f790556fa48413424cfae10e7486055966626810bc8d8ef5ad1d53";
 export const originalMeshUserSha256 = "a4ea14a13a0d544b473d360ad795b2a9bfcd858ac12b1e736fceb6ca43351831";
 
-const originalBlock = `            case 12: // SET DISPLAY, forward to agent
+const originalDisplayRequestBlock = `            case 10: // CTRL-ALT-DEL, forward to agent
+                if (viewer.viewOnly == false) { obj.sendToAgent(data); }
+                break;
+            case 12: // SET DISPLAY, forward to agent
                 if (viewer.viewOnly == false) { obj.sendToAgent(data); }
                 break;`;
 
-const patchedBlock = `            case 12: // SET DISPLAY, allow a validated physical display in view-only sessions
+const patchedDisplayRequestBlock = `            case 10: // CTRL-ALT-DEL, forward to agent
+                if (viewer.viewOnly == false) { obj.sendToAgent(data); }
+                break;
+            case 11: // GET DISPLAYS, read-only request allowed for view-only sessions
+                obj.sendToAgent(data);
+                break;
+            case 12: // SET DISPLAY, allow a validated physical display in view-only sessions
                 if ((data.length != 6) || (obj.lastDisplayInfoData == null) || (obj.lastDisplayInfoData.length < 8)) break;
                 var display = data.readUInt16BE(4);
                 if (display == 65535) break;
@@ -25,6 +34,18 @@ const patchedBlock = `            case 12: // SET DISPLAY, allow a validated phy
                 if (displayFound) { obj.sendToAgent(data); }
                 break;`;
 
+const originalDisplayInfoBroadcastBlock = `            case 11: // GetDisplays
+                // Store and send this to all viewers right away
+                obj.lastDisplayInfoData = data;
+                obj.sendToAllInputViewers(data);
+                break;`;
+
+const patchedDisplayInfoBroadcastBlock = `            case 11: // GetDisplays
+                // Store and send this to all viewers right away, including view-only sessions
+                obj.lastDisplayInfoData = data;
+                obj.sendToAllViewers(data);
+                break;`;
+
 const originalDeviceShareCleanupBlock = `                            if (doc.expireTime < now) { parent.db.Remove(doc._id, function () { }); delete docs[i]; } else {`;
 
 const patchedDeviceShareCleanupBlock = `                            if (doc.expireTime < now) { parent.db.Remove(doc._id, function () { }); docs.splice(i, 1); i--; } else {`;
@@ -33,11 +54,15 @@ export function patchMultiplexSource(source, actualSha256 = digest(source)) {
   if (actualSha256 !== originalMultiplexSha256) {
     throw new Error(`MeshCentral ${meshCentralVersion} meshdesktopmultiplex.js SHA-256 不匹配，expected=${originalMultiplexSha256} actual=${actualSha256}`);
   }
-  const occurrences = source.split(originalBlock).length - 1;
-  if (occurrences !== 1) {
-    throw new Error(`MeshCentral ${meshCentralVersion} SetDisplay 补丁上下文数量不正确：${occurrences}`);
+  const requestOccurrences = source.split(originalDisplayRequestBlock).length - 1;
+  if (requestOccurrences !== 1) {
+    throw new Error(`MeshCentral ${meshCentralVersion} 显示器请求补丁上下文数量不正确：${requestOccurrences}`);
   }
-  return source.replace(originalBlock, patchedBlock);
+  const responseOccurrences = source.split(originalDisplayInfoBroadcastBlock).length - 1;
+  if (responseOccurrences !== 1) {
+    throw new Error(`MeshCentral ${meshCentralVersion} 显示器响应补丁上下文数量不正确：${responseOccurrences}`);
+  }
+  return source.replace(originalDisplayRequestBlock, patchedDisplayRequestBlock).replace(originalDisplayInfoBroadcastBlock, patchedDisplayInfoBroadcastBlock);
 }
 
 export function patchMeshUserSource(source, actualSha256 = digest(source)) {
