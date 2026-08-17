@@ -10,7 +10,8 @@ import { createToolbarAutoHideController, isImmersionExitKey, moveDeviceOrder } 
 
 type Page = "wall" | "devices" | "codes" | "downloads" | "diagnostics" | "audit" | "settings";
 type AuditLog = { id: number; operation: string; scriptSha256: string; durationMs: number; exitCode: number | null; outputTruncated: boolean; createdAt: string; sessionId: string; deviceId: string; deviceName: string; administrator: string };
-type MeshDesktopModel = { displays?: Record<string, string> | null; selectedDisplay?: number | null; onPreDrawImage?: () => void; GetDisplayNumbers?: () => void; FrameRateTimer?: number; SetDisplay?: (displayId: number) => void; SendCompressionLevel?: (type: number, quality: number, scaling: number, frameInterval: number) => void };
+type MeshDisplayInfoCallback = (sender: MeshDesktopModel, displays: Record<string, string> | null, selectedDisplay: number | null) => void;
+type MeshDesktopModel = { displays?: Record<string, string> | null; selectedDisplay?: number | null; onPreDrawImage?: () => void; onDisplayinfo?: MeshDisplayInfoCallback; GetDisplayNumbers?: () => void; FrameRateTimer?: number; SetDisplay?: (displayId: number) => void; SendCompressionLevel?: (type: number, quality: number, scaling: number, frameInterval: number) => void };
 type MeshDesktopRedirect = { m?: MeshDesktopModel; State?: number; Stop?: () => void };
 type MeshSharingWindow = Window & typeof globalThis & {
   connectDesktop?: (event: null, connectionType: number) => void;
@@ -208,7 +209,7 @@ function MeshDesktopViewer({ label, mode, ticket, selectedDisplayID, onResolveDi
 type ViewerCallbacks = { getSelectedDisplayID: () => number | null; onError: (value: string) => void; onNotice: (value: string) => void; onActualFps: (value: number) => void; onDisplays?: (displays: number[]) => void; onResolveDisplay: (displayID: number, removed: boolean) => Promise<void>; onDisconnect: () => void };
 
 function connectMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode, callbacks: ViewerCallbacks) {
-  const startedAt = Date.now(); let cancelled = false; let attemptTimer = 0; let monitorTimer = 0; let animationFrame = 0; let connected = false; let disconnectReported = false; let lastReport = 0; let lastDisplays = ""; let requestedDisplay: number | null = null; let sentDisplay: number | null = null; let lastDisplayRequest = 0; let hookedModel: MeshDesktopModel | null = null; let previousDrawHook: (() => void) | undefined; let installedDrawHook: (() => void) | undefined; const fps = new FrameActivityCounter(Math.max(16, Math.floor(frameIntervalByMode[mode] * 0.75)));
+  const startedAt = Date.now(); let cancelled = false; let attemptTimer = 0; let monitorTimer = 0; let animationFrame = 0; let connected = false; let disconnectReported = false; let lastReport = 0; let lastDisplays = ""; let lastDiagnosticState = ""; let requestedDisplay: number | null = null; let sentDisplay: number | null = null; let lastDisplayRequest = 0; let hookedModel: MeshDesktopModel | null = null; let previousDrawHook: (() => void) | undefined; let installedDrawHook: (() => void) | undefined; let displayHookedModel: MeshDesktopModel | null = null; let previousDisplayInfoHook: MeshDisplayInfoCallback | undefined; let installedDisplayInfoHook: MeshDisplayInfoCallback | undefined; const fps = new FrameActivityCounter(Math.max(16, Math.floor(frameIntervalByMode[mode] * 0.75)));
   const detachDrawHook = () => {
     if (hookedModel && hookedModel.onPreDrawImage === installedDrawHook) hookedModel.onPreDrawImage = previousDrawHook;
     hookedModel = null; previousDrawHook = undefined; installedDrawHook = undefined;
@@ -224,6 +225,26 @@ function connectMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode, ca
     model.onPreDrawImage = installedDrawHook;
     hookedModel = model;
   };
+  const detachDisplayInfoHook = () => {
+    if (displayHookedModel && displayHookedModel.onDisplayinfo === installedDisplayInfoHook) displayHookedModel.onDisplayinfo = previousDisplayInfoHook;
+    displayHookedModel = null; previousDisplayInfoHook = undefined; installedDisplayInfoHook = undefined;
+  };
+  const publishDisplays = (rawDisplays: Record<string, string> | null | undefined) => {
+    const displays = physicalDisplayIds(rawDisplays); const signature = displays.join(",");
+    if (signature === lastDisplays) return;
+    lastDisplays = signature; requestedDisplay = null; sentDisplay = null; callbacks.onDisplays?.(displays);
+    const viewer = frame.contentWindow as MeshSharingWindow | null; const model = viewer?.desktop?.m;
+    const diagnostic = `${viewer?.desktop?.State ?? "-"}:${Boolean(model)}:${typeof model?.GetDisplayNumbers === "function"}:${signature}`;
+    if (diagnostic !== lastDiagnosticState) { lastDiagnosticState = diagnostic; console.debug("[DeskPatrol] MeshCentral 显示器状态", { state: viewer?.desktop?.State ?? null, hasModel: Boolean(model), canRequest: typeof model?.GetDisplayNumbers === "function", count: displays.length }); }
+  };
+  const attachDisplayInfoHook = (model: MeshDesktopModel) => {
+    if (displayHookedModel === model) return;
+    detachDisplayInfoHook();
+    previousDisplayInfoHook = model.onDisplayinfo;
+    installedDisplayInfoHook = (sender, displays, selectedDisplay) => { previousDisplayInfoHook?.call(model, sender, displays, selectedDisplay); publishDisplays(displays); };
+    model.onDisplayinfo = installedDisplayInfoHook;
+    displayHookedModel = model;
+  };
   const monitor = () => {
     if (cancelled || !frame.isConnected) return;
     const viewer = frame.contentWindow as MeshSharingWindow | null; const desktop = viewer?.desktop; const model = desktop?.m;
@@ -231,13 +252,13 @@ function connectMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode, ca
     if (connected && desktop?.State === 0 && !disconnectReported) { disconnectReported = true; callbacks.onError("桌面 Relay 已断开，正在重建会话"); callbacks.onDisconnect(); }
     if (desktop?.State === 3 && model) {
       attachDrawHook(model);
+      attachDisplayInfoHook(model);
       const now = Date.now(); const displays = physicalDisplayIds(model.displays);
       if (model.GetDisplayNumbers && displayRequestDue(now, lastDisplayRequest, displays.length > 0)) { model.GetDisplayNumbers(); lastDisplayRequest = now; }
     } else if (desktop?.State !== 3) {
-      detachDrawHook(); lastDisplayRequest = 0; fps.reset();
+      detachDrawHook(); detachDisplayInfoHook(); lastDisplayRequest = 0; fps.reset();
     }
-    const displays = physicalDisplayIds(model?.displays); const signature = displays.join(",");
-    if (signature !== lastDisplays) { lastDisplays = signature; callbacks.onDisplays?.(displays); requestedDisplay = null; sentDisplay = null; }
+    const displays = physicalDisplayIds(model?.displays); publishDisplays(model?.displays);
     const resolved = resolveDisplaySelection(callbacks.getSelectedDisplayID(), displays);
     if (resolved.displayId !== null) {
       if (resolved.changed && requestedDisplay !== resolved.displayId) { requestedDisplay = resolved.displayId; callbacks.onNotice(resolved.removed ? `原屏幕已移除，正在切换到屏幕 ${resolved.displayId}` : `已默认选择屏幕 ${resolved.displayId}`); void callbacks.onResolveDisplay(resolved.displayId, resolved.removed).catch((next) => callbacks.onError(message(next))); }
@@ -258,7 +279,7 @@ function connectMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode, ca
     if (Date.now() - startedAt < 5_000) { attemptTimer = window.setTimeout(attempt, 100); return; }
     callbacks.onError("MeshCentral 桌面查看器初始化超时");
   };
-  attempt(); return () => { cancelled = true; window.clearTimeout(attemptTimer); window.clearInterval(monitorTimer); window.cancelAnimationFrame(animationFrame); detachDrawHook(); callbacks.onActualFps(0); stopMeshViewer(frame); };
+  attempt(); return () => { cancelled = true; window.clearTimeout(attemptTimer); window.clearInterval(monitorTimer); window.cancelAnimationFrame(animationFrame); detachDrawHook(); detachDisplayInfoHook(); callbacks.onActualFps(0); stopMeshViewer(frame); };
 }
 
 function configureMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode) {
