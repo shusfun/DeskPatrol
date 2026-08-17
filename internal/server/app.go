@@ -100,6 +100,8 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/auth/me", a.auth(http.HandlerFunc(a.me)))
 	mux.Handle("GET /api/v1/devices", a.auth(http.HandlerFunc(a.listDevices)))
 	mux.Handle("DELETE /api/v1/devices/{id}", a.auth(http.HandlerFunc(a.deleteDevice)))
+	mux.Handle("GET /api/v1/devices/{id}/display-selection", a.auth(http.HandlerFunc(a.getDisplaySelection)))
+	mux.Handle("PUT /api/v1/devices/{id}/display-selection", a.auth(http.HandlerFunc(a.putDisplaySelection)))
 	mux.Handle("POST /api/v1/devices/{id}/desktop-ticket", a.auth(http.HandlerFunc(a.createDesktopTicket)))
 	mux.Handle("GET /api/v1/wall-layout", a.auth(http.HandlerFunc(a.getWallLayout)))
 	mux.Handle("PUT /api/v1/wall-layout", a.auth(http.HandlerFunc(a.putWallLayout)))
@@ -475,7 +477,7 @@ func (a *App) debugAuth(next http.Handler) http.Handler {
 
 func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,name,architecture,status,screen_count,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
+	rows, err := pool.Query(r.Context(), `SELECT id,name,architecture,status,screen_count,selected_display_id,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -485,18 +487,69 @@ func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, name, architecture, status string
 		var screens int
+		var selectedDisplayID *int
 		var lastSeen *time.Time
 		var created time.Time
-		if err := rows.Scan(&id, &name, &architecture, &status, &screens, &lastSeen, &created); err != nil {
+		if err := rows.Scan(&id, &name, &architecture, &status, &screens, &selectedDisplayID, &lastSeen, &created); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if lastSeen == nil || time.Since(*lastSeen) > 90*time.Second {
 			status = "offline"
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "architecture": architecture, "status": status, "screenCount": screens, "lastSeenAt": lastSeen, "createdAt": created})
+		items = append(items, map[string]any{"id": id, "name": name, "architecture": architecture, "status": status, "screenCount": screens, "selectedDisplayId": selectedDisplayID, "lastSeenAt": lastSeen, "createdAt": created})
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (a *App) getDisplaySelection(w http.ResponseWriter, r *http.Request) {
+	_, pool, err := a.snapshot()
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err)
+		return
+	}
+	var displayID *int
+	if err := pool.QueryRow(r.Context(), `SELECT selected_display_id FROM devices WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id")).Scan(&displayID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, errors.New("设备不存在或已经删除"))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"displayId": displayID})
+}
+
+func (a *App) putDisplaySelection(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DisplayID *int `json:"displayId"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.DisplayID == nil || !validPhysicalDisplayID(*req.DisplayID) {
+		writeError(w, http.StatusBadRequest, errors.New("显示器编号必须是 0 到 65534 的物理屏幕编号，不能选择全部屏幕"))
+		return
+	}
+	_, pool, err := a.snapshot()
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err)
+		return
+	}
+	command, err := pool.Exec(r.Context(), `UPDATE devices SET selected_display_id=$2 WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id"), *req.DisplayID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("保存设备屏幕选择失败: %w", err))
+		return
+	}
+	if command.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, errors.New("设备不存在或已经删除"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"displayId": *req.DisplayID})
+}
+
+func validPhysicalDisplayID(displayID int) bool {
+	return displayID >= 0 && displayID < 65535
 }
 
 func (a *App) deleteDevice(w http.ResponseWriter, r *http.Request) {

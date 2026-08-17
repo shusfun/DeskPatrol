@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS devices (
   architecture TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   screen_count INTEGER NOT NULL DEFAULT 1 CHECK (screen_count > 0),
+  selected_display_id INTEGER CHECK (selected_display_id IS NULL OR selected_display_id BETWEEN 0 AND 65534),
   last_seen_at TIMESTAMPTZ,
 	deleted_at TIMESTAMPTZ,
 	deleted_by BIGINT REFERENCES administrators(id),
@@ -116,6 +117,13 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS mesh_id TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS client_token_hash TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES administrators(id);
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS selected_display_id INTEGER;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'devices_selected_display_id_check') THEN
+    ALTER TABLE devices ADD CONSTRAINT devices_selected_display_id_check CHECK (selected_display_id IS NULL OR selected_display_id BETWEEN 0 AND 65534);
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_mesh_id ON devices(mesh_id) WHERE mesh_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_client_token ON devices(client_token_hash) WHERE client_token_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS wall_layouts (

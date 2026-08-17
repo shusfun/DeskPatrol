@@ -158,3 +158,16 @@ func TestCanonicalDesktopShareURLUsesConfiguredPublicOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestValidPhysicalDisplayIDRejectsAllDisplaysAndOutOfRangeValues(t *testing.T) {
+	for _, value := range []int{0, 1, 42, 65534} {
+		if !validPhysicalDisplayID(value) {
+			t.Fatalf("物理显示器编号应有效: %d", value)
+		}
+	}
+	for _, value := range []int{-1, 65535, 65536} {
+		if validPhysicalDisplayID(value) {
+			t.Fatalf("非法或全部屏幕编号必须被拒绝: %d", value)
+		}
+	}
+}

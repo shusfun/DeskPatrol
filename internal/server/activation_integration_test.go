@@ -70,6 +70,63 @@ func TestConnectionKeyTakeoverDeleteAndRestore(t *testing.T) {
 	}
 }
 
+func TestDisplaySelectionPersistsAndRejectsAllDisplays(t *testing.T) {
+	app, _, administratorID := integrationTestApp(t)
+	key := createIntegrationConnectionKey(t, app, administratorID, "display-selection")
+	activation := activateIntegrationClient(t, app, key, "abcdef0123456789abcdef0123456789", http.StatusCreated)
+
+	get := func(expectedStatus int) *int {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+activation.DeviceID+"/display-selection", nil)
+		request.SetPathValue("id", activation.DeviceID)
+		response := httptest.NewRecorder()
+		app.getDisplaySelection(response, request)
+		if response.Code != expectedStatus {
+			t.Fatalf("读取屏幕选择返回 %d，期望 %d: %s", response.Code, expectedStatus, response.Body.String())
+		}
+		if expectedStatus != http.StatusOK {
+			return nil
+		}
+		var result struct {
+			Data struct {
+				DisplayID *int `json:"displayId"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Data.DisplayID
+	}
+	put := func(displayID int, expectedStatus int) {
+		raw, _ := json.Marshal(map[string]int{"displayId": displayID})
+		request := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+activation.DeviceID+"/display-selection", bytes.NewReader(raw))
+		request.SetPathValue("id", activation.DeviceID)
+		response := httptest.NewRecorder()
+		app.putDisplaySelection(response, request)
+		if response.Code != expectedStatus {
+			t.Fatalf("保存屏幕 %d 返回 %d，期望 %d: %s", displayID, response.Code, expectedStatus, response.Body.String())
+		}
+	}
+
+	if value := get(http.StatusOK); value != nil {
+		t.Fatalf("首次屏幕选择应为空，实际 %d", *value)
+	}
+	put(2, http.StatusOK)
+	if value := get(http.StatusOK); value == nil || *value != 2 {
+		t.Fatalf("屏幕选择未持久化: %v", value)
+	}
+	put(65535, http.StatusBadRequest)
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v1/devices/"+activation.DeviceID, nil)
+	deleteRequest.SetPathValue("id", activation.DeviceID)
+	deleteRequest = deleteRequest.WithContext(context.WithValue(deleteRequest.Context(), principalKey, principal{ID: administratorID, LoginName: "admin"}))
+	deleteResponse := httptest.NewRecorder()
+	app.deleteDevice(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusOK {
+		t.Fatalf("删除设备返回 %d: %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+	get(http.StatusNotFound)
+}
+
 type integrationConnectionKey struct {
 	ID            string
 	ConnectionKey string

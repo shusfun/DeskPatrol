@@ -121,8 +121,8 @@ function test(target) {
   if (["affected", "backend", "all"].includes(target)) run("go", ["test", "-p=2", "-parallel=2", "./internal/...", "./cmd/server"]);
   if (["affected", "frontend", "all"].includes(target)) run("pnpm", ["-r", "--workspace-concurrency=1", "--if-present", "test"]);
   if (["client", "all"].includes(target)) run("go", ["test", "-p=2", "-parallel=2", "./cmd/client/...", "./cmd/client-helper"]);
-  if (["affected", "all"].includes(target)) run("node", ["--test", "integrations/deskpatrol/deskpatrol.test.cjs"]);
-  if (target === "release") { run("node", ["--test", "integrations/deskpatrol/deskpatrol.test.cjs"]); release(["verify", ...process.argv.slice(4)]); }
+  if (["affected", "all"].includes(target)) run("node", ["--test", "integrations/deskpatrol/deskpatrol.test.cjs", "scripts/patch-meshcentral.test.mjs"]);
+  if (target === "release") { run("node", ["--test", "integrations/deskpatrol/deskpatrol.test.cjs", "scripts/patch-meshcentral.test.mjs"]); release(["verify", ...process.argv.slice(4)]); }
 }
 
 function verify(target) {
