@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameIntervalByMode, physicalDisplayIds, resolveDisplaySelection, RollingFpsCounter, targetFps } from "./desktop-viewer";
+import { displayRefreshIntervalMs, displayRequestDue, displayRequestIntervalMs, frameIntervalByMode, FrameActivityCounter, physicalDisplayIds, resolveDisplaySelection, RollingFpsCounter, targetFps } from "./desktop-viewer";
 
 describe("桌面查看器模式", () => {
   it("固定使用 2.5、10 和 20 FPS", () => {
@@ -28,5 +28,25 @@ describe("实际 FPS", () => {
     for (let timestamp = 100; timestamp <= 3000; timestamp += 100) counter.record(timestamp);
     expect(counter.value(3000)).toBe(10);
     expect(counter.value(6100)).toBe(0);
+  });
+
+  it("同一刷新周期内的多个 Tile 只计为一次活动", () => {
+    const counter = new FrameActivityCounter(100);
+    expect(counter.record(100)).toBe(true);
+    expect(counter.record(120)).toBe(false);
+    expect(counter.record(200)).toBe(true);
+    expect(counter.value(200)).toBeCloseTo(0.6667, 4);
+    counter.reset();
+    expect(counter.record(220)).toBe(true);
+  });
+});
+
+describe("显示器查询", () => {
+  it("未返回物理屏幕时快速重试，返回后低频刷新", () => {
+    expect(displayRequestIntervalMs).toBe(1_000);
+    expect(displayRefreshIntervalMs).toBe(5_000);
+    expect(displayRequestDue(1_000, 0, false)).toBe(true);
+    expect(displayRequestDue(4_999, 0, true)).toBe(false);
+    expect(displayRequestDue(5_000, 0, true)).toBe(true);
   });
 });

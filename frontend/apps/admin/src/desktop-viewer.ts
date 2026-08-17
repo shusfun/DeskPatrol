@@ -6,6 +6,14 @@ export const frameIntervalByMode: Record<DesktopViewerMode, number> = {
   fullscreen: 50,
 };
 
+export const displayRequestIntervalMs = 1_000;
+export const displayRefreshIntervalMs = 5_000;
+
+export function displayRequestDue(now: number, lastRequest: number, hasPhysicalDisplays: boolean) {
+  const interval = hasPhysicalDisplays ? displayRefreshIntervalMs : displayRequestIntervalMs;
+  return now - lastRequest >= interval;
+}
+
 export function targetFps(mode: DesktopViewerMode) {
   return 1000 / frameIntervalByMode[mode];
 }
@@ -46,5 +54,30 @@ export class RollingFpsCounter {
   private prune(timestamp: number) {
     const cutoff = timestamp - this.windowMs;
     while (this.updates.length > 0 && this.updates[0] <= cutoff) this.updates.shift();
+  }
+}
+
+export class FrameActivityCounter {
+  private readonly counter: RollingFpsCounter;
+  private lastEvent: number | undefined;
+
+  constructor(private readonly minIntervalMs: number, windowMs = 3_000) {
+    this.counter = new RollingFpsCounter(windowMs);
+  }
+
+  record(timestamp: number) {
+    if (this.lastEvent !== undefined && timestamp - this.lastEvent < this.minIntervalMs) return false;
+    this.lastEvent = timestamp;
+    this.counter.record(timestamp);
+    return true;
+  }
+
+  value(timestamp: number) {
+    return this.counter.value(timestamp);
+  }
+
+  reset() {
+    this.lastEvent = undefined;
+    this.counter.reset();
   }
 }
