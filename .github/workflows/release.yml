@@ -44,7 +44,7 @@ jobs:
       - run: pnpm install --frozen-lockfile --child-concurrency=2
       - run: pnpm run repo -- verify backend
       - run: pnpm run repo -- verify frontend
-      - run: node --test integrations/deskpatrol/deskpatrol.test.cjs
+      - run: node --test integrations/deskpatrol/deskpatrol.test.cjs scripts/patch-meshcentral.test.mjs
 
   windows:
     needs: verify

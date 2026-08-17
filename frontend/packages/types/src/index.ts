@@ -27,6 +27,7 @@ export type Device = {
   architecture: "amd64" | "arm64";
   status: "online" | "offline" | "locked" | "pending" | string;
   screenCount: number;
+  selectedDisplayId: number | null;
   lastSeenAt?: string;
   createdAt: string;
 };

@@ -55,6 +55,7 @@ npm_config_platform=linux npm_config_arch="$node_arch" npm --prefix "$stage/mesh
 node scripts/fetch-meshcentral.mjs "$work_dir/meshcentral-1.2.5.tar.gz"
 mkdir -p "$stage/meshcentral/node_modules/meshcentral"
 tar -xzf "$work_dir/meshcentral-1.2.5.tar.gz" -C "$stage/meshcentral/node_modules/meshcentral" --strip-components=1
+node scripts/patch-meshcentral.mjs "$stage/meshcentral/node_modules/meshcentral"
 npm_config_platform=linux npm_config_arch="$node_arch" npm --prefix "$stage/meshcentral/node_modules/meshcentral" ci --omit=dev --ignore-scripts --registry=https://registry.npmmirror.com --replace-registry-host=always
 node -e 'const { createRequire } = require("node:module"); const requireFromMeshCentral = createRequire(process.argv[1]); for (const moduleName of ["ua-client-hints-js", "image-size", "pg", "otplib"]) { requireFromMeshCentral.resolve(moduleName); }' \
   "$stage/meshcentral/node_modules/meshcentral/meshcentral.js"

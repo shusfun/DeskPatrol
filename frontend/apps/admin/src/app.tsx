@@ -5,13 +5,17 @@ import { formatBytes, formatDate } from "@deskpatrol/core";
 import { Activity, AppWindow, ChevronLeft, Clipboard, Copy, Download, Expand, Grid2X2, KeyRound, LayoutDashboard, List, LoaderCircle, LockKeyhole, LogOut, Monitor, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, Terminal, Trash2 } from "@deskpatrol/icons";
 import type { ActivationCode, ActivationCodeCreated, ActivationCodeStatus, Administrator, DebugSession, Device, DownloadArtifact, ReleaseJob, SetupRequest, SetupResult, SetupStatus, WallLayout } from "@deskpatrol/types";
 import { Button, Dialog, EmptyState, Field, IconButton, SelectField, StatusBadge, ThemeControl } from "@deskpatrol/ui-admin";
+import { frameIntervalByMode, physicalDisplayIds, resolveDisplaySelection, RollingFpsCounter, targetFps, type DesktopViewerMode } from "./desktop-viewer";
 import { createToolbarAutoHideController, isImmersionExitKey, moveDeviceOrder } from "./wall-immersion";
 
 type Page = "wall" | "devices" | "codes" | "downloads" | "diagnostics" | "audit" | "settings";
 type AuditLog = { id: number; operation: string; scriptSha256: string; durationMs: number; exitCode: number | null; outputTruncated: boolean; createdAt: string; sessionId: string; deviceId: string; deviceName: string; administrator: string };
+type MeshDesktopModel = { displays?: Record<string, string> | null; selectedDisplay?: number | null; TilesDrawn?: number; FrameRateTimer?: number; SetDisplay?: (displayId: number) => void; SendCompressionLevel?: (type: number, quality: number, scaling: number, frameInterval: number) => void };
+type MeshDesktopRedirect = { m?: MeshDesktopModel; State?: number; Stop?: () => void };
 type MeshSharingWindow = Window & typeof globalThis & {
   connectDesktop?: (event: null, connectionType: number) => void;
-  desktopsettings?: { framerate?: number };
+  desktopsettings?: { framerate?: number; quality?: number; scaling?: number };
+  desktop?: MeshDesktopRedirect | null;
   __deskPatrolConnected?: boolean;
 };
 
@@ -104,9 +108,10 @@ function WorkspaceHeader({ title, description, actions }: { title: string; descr
 
 function useDevices() {
   const [devices, setDevices] = useState<Device[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
-  const refresh = async () => { setLoading(true); setError(""); try { setDevices(await request<Device[]>("/api/v1/devices")); } catch (next) { setError(message(next)); } finally { setLoading(false); } };
-  useEffect(() => { void refresh(); }, []);
-  return { devices, loading, error, refresh };
+  const refresh = useCallback(async () => { setLoading(true); setError(""); try { setDevices(await request<Device[]>("/api/v1/devices")); } catch (next) { setError(message(next)); } finally { setLoading(false); } }, []);
+  const updateDisplaySelection = useCallback((deviceID: string, displayID: number) => setDevices((current) => current.map((device) => device.id === deviceID ? { ...device, selectedDisplayId: displayID } : device)), []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  return { devices, loading, error, refresh, updateDisplaySelection };
 }
 
 const tileCounts = [1, 4, 9, 16] as const;
@@ -135,102 +140,124 @@ function LayoutSelector({ layout, busy, onChange }: { layout: WallLayout; busy: 
 }
 
 function WallPage() {
-  const { devices, loading, error, refresh } = useDevices(); const [layout, setLayout] = useState<WallLayout>({ tileCount: 9, deviceOrder: [] }); const [layoutBusy, setLayoutBusy] = useState(true); const [layoutError, setLayoutError] = useState(""); const [dragged, setDragged] = useState(""); const [tickets, setTickets] = useState<Record<string, { url: string; expiresAt: string; viewOnly: true }>>({}); const [ticketErrors, setTicketErrors] = useState<Record<string, string>>({}); const [selected, setSelected] = useState(""); const [immersive, setImmersive] = useState(false);
-  const exitImmersive = useCallback(() => setImmersive(false), []);
-  const toolbar = useImmersiveToolbar(immersive, exitImmersive);
+  const { devices, loading, error, refresh, updateDisplaySelection } = useDevices();
+  const [layout, setLayout] = useState<WallLayout>({ tileCount: 9, deviceOrder: [] }); const [layoutBusy, setLayoutBusy] = useState(true); const [layoutError, setLayoutError] = useState(""); const [dragged, setDragged] = useState(""); const [tickets, setTickets] = useState<Record<string, { url: string; expiresAt: string; viewOnly: true }>>({}); const [ticketErrors, setTicketErrors] = useState<Record<string, string>>({}); const [selected, setSelected] = useState(""); const [immersive, setImmersive] = useState(false); const [detailDisplays, setDetailDisplays] = useState<number[]>([]); const renewingTickets = useRef(new Set<string>());
+  const exitImmersive = useCallback(() => setImmersive(false), []); const toolbar = useImmersiveToolbar(immersive, exitImmersive);
   useEffect(() => { request<WallLayout>("/api/v1/wall-layout").then(setLayout).catch((next) => setLayoutError(message(next))).finally(() => setLayoutBusy(false)); }, []);
   const ordered = useMemo(() => [...devices].sort((a, b) => { const ai = layout.deviceOrder.indexOf(a.id); const bi = layout.deviceOrder.indexOf(b.id); return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi); }), [devices, layout.deviceOrder]);
+  const selectedDevice = ordered.find((device) => device.id === selected); const activeDevices = selectedDevice ? [selectedDevice] : ordered.slice(0, layout.tileCount); const activeTicketKey = activeDevices.map((device) => `${device.id}:${device.status}`).join("|");
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      const online = ordered.filter((device) => device.status === "online" && (ordered.indexOf(device) < layout.tileCount || device.id === selected));
-      const values = await Promise.all(online.map(async (device) => {
+      const values = await Promise.all(activeDevices.filter((device) => device.status === "online").map(async (device) => {
         try { return { deviceId: device.id, ticket: await request<{ url: string; expiresAt: string; viewOnly: true }>(`/api/v1/devices/${device.id}/desktop-ticket`, { method: "POST" }) }; }
         catch (next) { return { deviceId: device.id, error: message(next) }; }
       }));
-      if (!cancelled) {
-        setTickets(Object.fromEntries(values.flatMap((value) => value.ticket ? [[value.deviceId, value.ticket]] : [])));
-        setTicketErrors(Object.fromEntries(values.flatMap((value) => value.error ? [[value.deviceId, value.error]] : [])));
-      }
+      if (!cancelled) { setTickets(Object.fromEntries(values.flatMap((value) => value.ticket ? [[value.deviceId, value.ticket]] : []))); setTicketErrors(Object.fromEntries(values.flatMap((value) => value.error ? [[value.deviceId, value.error]] : []))); }
     };
-    void load(); const timer = window.setInterval(() => void load(), 4 * 60 * 1000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [ordered, layout.tileCount, selected]);
+    void load(); return () => { cancelled = true; };
+  }, [activeTicketKey]);
+  useEffect(() => { setDetailDisplays([]); }, [selected]);
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    const load = async () => { try { const value = await request<{ displayId: number | null }>(`/api/v1/devices/${selected}/display-selection`); if (!cancelled && value.displayId !== null) updateDisplaySelection(selected, value.displayId); } catch (next) { if (!cancelled) setTicketErrors((current) => ({ ...current, [selected]: message(next) })); } };
+    void load(); const timer = window.setInterval(() => void load(), 3_000); return () => { cancelled = true; window.clearInterval(timer); };
+  }, [selected, updateDisplaySelection]);
+  const renewTicket = useCallback(async (deviceID: string) => {
+    if (renewingTickets.current.has(deviceID)) return; renewingTickets.current.add(deviceID);
+    try { const ticket = await request<{ url: string; expiresAt: string; viewOnly: true }>(`/api/v1/devices/${deviceID}/desktop-ticket`, { method: "POST" }); setTickets((current) => ({ ...current, [deviceID]: ticket })); setTicketErrors((current) => ({ ...current, [deviceID]: "" })); }
+    catch (next) { setTicketErrors((current) => ({ ...current, [deviceID]: message(next) })); }
+    finally { renewingTickets.current.delete(deviceID); }
+  }, []);
+  const saveDisplaySelection = useCallback(async (deviceID: string, displayID: number, _removed = false) => {
+    try { await request(`/api/v1/devices/${deviceID}/display-selection`, { method: "PUT", body: json({ displayId: displayID }) }); updateDisplaySelection(deviceID, displayID); setTicketErrors((current) => ({ ...current, [deviceID]: "" })); }
+    catch (next) { setTicketErrors((current) => ({ ...current, [deviceID]: message(next) })); throw next; }
+  }, [updateDisplaySelection]);
   const saveTileCount = async (value: 1 | 4 | 9 | 16) => { const next = { ...layout, tileCount: value }; setLayout(next); setLayoutError(""); try { await request("/api/v1/wall-layout", { method: "PUT", body: json(next) }); } catch (nextError) { setLayoutError(message(nextError)); } };
   const drop = async (target: string) => { if (!dragged || dragged === target) return; const order = moveDeviceOrder(ordered.map((item) => item.id), dragged, target); const next = { ...layout, deviceOrder: order }; setLayout(next); setDragged(""); setLayoutError(""); try { await request("/api/v1/wall-layout", { method: "PUT", body: json(next) }); } catch (nextError) { setLayoutError(message(nextError)); } };
-  const selectedDevice = ordered.find((device) => device.id === selected);
-  const tiles = loading ? <ContentLoading /> : ordered.length === 0 ? <EmptyState icon={<Grid2X2 />} title="还没有已激活设备" description="创建设备激活码并完成 Windows 客户端激活后，设备会出现在监控墙。" /> : <section className={`monitor-grid monitor-grid--${layout.tileCount}`}>{ordered.slice(0, layout.tileCount).map((device) => <article aria-label={`查看 ${device.name}`} className="monitor-tile" draggable key={device.id} onClick={() => setSelected(device.id)} onDragStart={() => setDragged(device.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void drop(device.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(device.id); } }} tabIndex={0}><DesktopFrame device={device} error={ticketErrors[device.id]} ticket={tickets[device.id]} /><footer><div><strong>{device.name}</strong><small>{device.screenCount} 个显示器 · {device.architecture}</small></div><StatusBadge status={device.status === "online" ? "ok" : device.status === "locked" ? "warn" : "muted"}>{statusText(device.status)}</StatusBadge></footer></article>)}</section>;
-  if (immersive) return <section className={`wall-immersive${selectedDevice ? " wall-immersive--detail" : ""}`}>
-    <button aria-label="显示监控墙操作栏" className="wall-toolbar-sensor" onClick={toolbar.show} onPointerEnter={toolbar.show} type="button" />
-    <header className={`wall-immersive-toolbar${toolbar.visible ? " visible" : ""}`} onPointerEnter={toolbar.show} onPointerLeave={toolbar.scheduleHide}>
-      <div>{selectedDevice ? <Button icon={<ChevronLeft size={16} />} onClick={() => setSelected("")}>返回监控墙</Button> : <strong>监控墙</strong>}</div>
-      <div className="wall-immersive-actions">{selectedDevice ? null : <LayoutSelector busy={layoutBusy} layout={layout} onChange={(value) => void saveTileCount(value)} />}<ThemeControl compact /><IconButton label="刷新设备" onClick={() => void refresh()}><RefreshCw /></IconButton><Button onClick={exitImmersive}>退出沉浸</Button></div>
-    </header>
-    {selectedDevice ? <DesktopDetail device={selectedDevice} error={ticketErrors[selectedDevice.id]} immersive ticket={tickets[selectedDevice.id]} onBack={() => setSelected("")} /> : <div className="wall-immersive-content">{error || layoutError ? <InlineError value={error || layoutError} /> : null}{tiles}</div>}
-  </section>;
-  if (selectedDevice) return <DesktopDetail device={selectedDevice} error={ticketErrors[selectedDevice.id]} ticket={tickets[selectedDevice.id]} onBack={() => setSelected("")} />;
-  return <><WorkspaceHeader title="监控墙" description="设备主屏低帧预览，不保存桌面内容。" actions={<><LayoutSelector busy={layoutBusy} layout={layout} onChange={(value) => void saveTileCount(value)} /><IconButton label="刷新设备" onClick={() => void refresh()}><RefreshCw /></IconButton><Button icon={<Expand size={16} />} onClick={() => setImmersive(true)}>沉浸显示</Button></>} />{error || layoutError ? <InlineError value={error || layoutError} /> : null}{tiles}</>;
+  const tiles = loading ? <ContentLoading /> : ordered.length === 0 ? <EmptyState icon={<Grid2X2 />} title="还没有已激活设备" description="创建设备激活码并完成 Windows 客户端激活后，设备会出现在监控墙。" /> : <section className={`monitor-grid monitor-grid--${layout.tileCount}`}>{ordered.slice(0, layout.tileCount).map((device) => <article aria-label={`查看 ${device.name}`} className="monitor-tile" draggable key={device.id} onClick={() => setSelected(device.id)} onDragStart={() => setDragged(device.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void drop(device.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(device.id); } }} tabIndex={0}><DesktopFrame device={device} error={ticketErrors[device.id]} ticket={tickets[device.id]} onDisconnect={() => void renewTicket(device.id)} onResolveDisplay={(displayID, removed) => saveDisplaySelection(device.id, displayID, removed)} /><footer><div><strong>{device.name}</strong><small>{device.screenCount} 个显示器 · {device.architecture}</small></div><StatusBadge status={device.status === "online" ? "ok" : device.status === "locked" ? "warn" : "muted"}>{statusText(device.status)}</StatusBadge></footer></article>)}</section>;
+  if (immersive) return <section className={`wall-immersive${selectedDevice ? " wall-immersive--detail" : ""}`}><button aria-label="显示监控墙操作栏" className="wall-toolbar-sensor" onClick={toolbar.show} onPointerEnter={toolbar.show} type="button" /><header className={`wall-immersive-toolbar${toolbar.visible ? " visible" : ""}`} onPointerEnter={toolbar.show} onPointerLeave={toolbar.scheduleHide}><div>{selectedDevice ? <Button icon={<ChevronLeft size={16} />} onClick={() => setSelected("")}>返回监控墙</Button> : <strong>监控墙</strong>}</div><div className="wall-immersive-actions">{selectedDevice ? <DisplaySelector displays={detailDisplays} value={selectedDevice.selectedDisplayId} onChange={(displayID) => void saveDisplaySelection(selectedDevice.id, displayID)} /> : <LayoutSelector busy={layoutBusy} layout={layout} onChange={(value) => void saveTileCount(value)} />}<ThemeControl compact /><IconButton label="刷新设备" onClick={() => void refresh()}><RefreshCw /></IconButton><Button onClick={exitImmersive}>退出沉浸</Button></div></header>{selectedDevice ? <DesktopDetail device={selectedDevice} displays={detailDisplays} error={ticketErrors[selectedDevice.id]} immersive ticket={tickets[selectedDevice.id]} onBack={() => setSelected("")} onDisconnect={() => void renewTicket(selectedDevice.id)} onDisplays={setDetailDisplays} onSelectDisplay={(displayID, removed) => saveDisplaySelection(selectedDevice.id, displayID, removed)} /> : <div className="wall-immersive-content">{error || layoutError ? <InlineError value={error || layoutError} /> : null}{tiles}</div>}</section>;
+  if (selectedDevice) return <DesktopDetail device={selectedDevice} displays={detailDisplays} error={ticketErrors[selectedDevice.id]} ticket={tickets[selectedDevice.id]} onBack={() => setSelected("")} onDisconnect={() => void renewTicket(selectedDevice.id)} onDisplays={setDetailDisplays} onSelectDisplay={(displayID, removed) => saveDisplaySelection(selectedDevice.id, displayID, removed)} />;
+  return <><WorkspaceHeader title="监控墙" description="设备当前选中屏幕以 2.5 FPS 目标速率预览，不保存桌面内容。" actions={<><LayoutSelector busy={layoutBusy} layout={layout} onChange={(value) => void saveTileCount(value)} /><IconButton label="刷新设备" onClick={() => void refresh()}><RefreshCw /></IconButton><Button icon={<Expand size={16} />} onClick={() => setImmersive(true)}>沉浸显示</Button></>} />{error || layoutError ? <InlineError value={error || layoutError} /> : null}{tiles}</>;
 }
 
-function DesktopFrame({ device, ticket, error }: { device: Device; ticket?: { url: string }; error?: string }) {
-  const [viewerError, setViewerError] = useState("");
-  const loaded = (frame: HTMLIFrameElement) => {
-    connectMeshViewer(frame, "wall", setViewerError);
+function DisplaySelector({ displays, value, onChange }: { displays: number[]; value: number | null; onChange: (displayID: number) => void }) {
+  return <label className="display-selector"><Monitor size={15} /><span>屏幕</span><select aria-label="选择设备屏幕" disabled={displays.length === 0} value={value !== null && displays.includes(value) ? value : ""} onChange={(event) => onChange(Number(event.target.value))}><option disabled value="">{displays.length === 0 ? "读取中" : "请选择"}</option>{displays.map((displayID) => <option key={displayID} value={displayID}>屏幕 {displayID}</option>)}</select></label>;
+}
+
+function DesktopFrame({ device, ticket, error, onDisconnect, onResolveDisplay }: { device: Device; ticket?: { url: string }; error?: string; onDisconnect: () => void; onResolveDisplay: (displayID: number, removed: boolean) => Promise<void> }) {
+  return <div className="desktop-frame">{ticket ? <MeshDesktopViewer label={`${device.name} 桌面预览`} mode="wall" onDisconnect={onDisconnect} onResolveDisplay={onResolveDisplay} selectedDisplayID={device.selectedDisplayId} ticket={ticket} /> : <><Monitor /><span>{error || (device.status === "locked" ? "设备已锁屏" : device.status === "online" ? "正在连接桌面" : "设备离线")}</span></>}{ticket && error ? <p className="desktop-viewer-error" role="alert">{error}</p> : null}</div>;
+}
+
+function DesktopDetail({ device, displays, ticket, error, onBack, onDisconnect, onDisplays, onSelectDisplay, immersive = false }: { device: Device; displays: number[]; ticket?: { url: string }; error?: string; onBack: () => void; onDisconnect: () => void; onDisplays: (displays: number[]) => void; onSelectDisplay: (displayID: number, removed: boolean) => Promise<void>; immersive?: boolean }) {
+  const container = useRef<HTMLElement | null>(null); const [browserFullscreen, setBrowserFullscreen] = useState(false);
+  useEffect(() => { const changed = () => setBrowserFullscreen(document.fullscreenElement === container.current); document.addEventListener("fullscreenchange", changed); return () => document.removeEventListener("fullscreenchange", changed); }, []);
+  const fullscreen = () => { if (container.current?.requestFullscreen) void container.current.requestFullscreen(); }; const mode: DesktopViewerMode = immersive || browserFullscreen ? "fullscreen" : "detail"; const selector = <DisplaySelector displays={displays} value={device.selectedDisplayId} onChange={(displayID) => void onSelectDisplay(displayID, false)} />;
+  return <>{immersive ? null : <WorkspaceHeader title={device.name} description={`${device.screenCount} 个显示器 · ${device.architecture}`} actions={<>{selector}<Button icon={<ChevronLeft size={16} />} onClick={onBack}>返回监控墙</Button><IconButton label="全屏" onClick={fullscreen}><Expand /></IconButton></>} />}<section className={`single-desktop${immersive ? " single-desktop--immersive" : ""}`} ref={container}>{ticket ? <MeshDesktopViewer label={`${device.name} 桌面`} mode={mode} onDisconnect={onDisconnect} onDisplays={onDisplays} onResolveDisplay={onSelectDisplay} selectedDisplayID={device.selectedDisplayId} ticket={ticket} /> : <div><Monitor /><StatusBadge status={error ? "error" : device.status === "online" ? "warn" : "muted"}>{error || (device.status === "online" ? "正在创建桌面会话" : statusText(device.status))}</StatusBadge></div>}{ticket && error ? <p className="desktop-viewer-error" role="alert">{error}</p> : null}<div className="single-desktop-fullscreen-controls">{selector}</div></section></>;
+}
+
+function MeshDesktopViewer({ label, mode, ticket, selectedDisplayID, onResolveDisplay, onDisplays, onDisconnect }: { label: string; mode: DesktopViewerMode; ticket: { url: string }; selectedDisplayID: number | null; onResolveDisplay: (displayID: number, removed: boolean) => Promise<void>; onDisplays?: (displays: number[]) => void; onDisconnect: () => void }) {
+  const frame = useRef<HTMLIFrameElement | null>(null); const cleanup = useRef<(() => void) | null>(null); const selectedDisplay = useRef(selectedDisplayID); const [viewerError, setViewerError] = useState(""); const [notice, setNotice] = useState(""); const [actualFps, setActualFps] = useState(0); selectedDisplay.current = selectedDisplayID;
+  useEffect(() => () => { cleanup.current?.(); cleanup.current = null; }, [ticket.url]);
+  useEffect(() => { if (frame.current) syncMeshViewer(frame.current, mode, selectedDisplayID); }, [mode, selectedDisplayID]);
+  const loaded = (element: HTMLIFrameElement) => { cleanup.current?.(); frame.current = element; cleanup.current = connectMeshViewer(element, mode, { getSelectedDisplayID: () => selectedDisplay.current, onError: setViewerError, onNotice: setNotice, onActualFps: setActualFps, onDisplays, onResolveDisplay, onDisconnect }); };
+  return <><iframe aria-label={label} allowFullScreen key={ticket.url} onLoad={(event) => loaded(event.currentTarget)} ref={frame} sandbox="allow-scripts allow-same-origin" src={ticket.url} /><span className="desktop-fps">实际 {actualFps.toFixed(1)} / 目标 {targetFps(mode).toFixed(1)} FPS</span>{notice ? <span className="desktop-notice">{notice}</span> : null}{viewerError ? <p className="desktop-viewer-error" role="alert">{viewerError}</p> : null}</>;
+}
+
+type ViewerCallbacks = { getSelectedDisplayID: () => number | null; onError: (value: string) => void; onNotice: (value: string) => void; onActualFps: (value: number) => void; onDisplays?: (displays: number[]) => void; onResolveDisplay: (displayID: number, removed: boolean) => Promise<void>; onDisconnect: () => void };
+
+function connectMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode, callbacks: ViewerCallbacks) {
+  const startedAt = Date.now(); let cancelled = false; let attemptTimer = 0; let monitorTimer = 0; let animationFrame = 0; let connected = false; let disconnectReported = false; let lastTiles: number | undefined; let lastReport = 0; let lastDisplays = ""; let requestedDisplay: number | null = null; let sentDisplay: number | null = null; const fps = new RollingFpsCounter();
+  const monitor = () => {
+    if (cancelled || !frame.isConnected) return;
+    const viewer = frame.contentWindow as MeshSharingWindow | null; const desktop = viewer?.desktop; const model = desktop?.m;
+    if (desktop?.State === 3) { connected = true; disconnectReported = false; }
+    if (connected && desktop?.State === 0 && !disconnectReported) { disconnectReported = true; callbacks.onError("桌面 Relay 已断开，正在重建会话"); callbacks.onDisconnect(); }
+    const displays = physicalDisplayIds(model?.displays); const signature = displays.join(",");
+    if (signature !== lastDisplays) { lastDisplays = signature; callbacks.onDisplays?.(displays); requestedDisplay = null; sentDisplay = null; }
+    const resolved = resolveDisplaySelection(callbacks.getSelectedDisplayID(), displays);
+    if (resolved.displayId !== null) {
+      if (resolved.changed && requestedDisplay !== resolved.displayId) { requestedDisplay = resolved.displayId; callbacks.onNotice(resolved.removed ? `原屏幕已移除，正在切换到屏幕 ${resolved.displayId}` : `已默认选择屏幕 ${resolved.displayId}`); void callbacks.onResolveDisplay(resolved.displayId, resolved.removed).catch((next) => callbacks.onError(message(next))); }
+      if (model?.selectedDisplay === resolved.displayId) sentDisplay = resolved.displayId;
+      if (sentDisplay !== resolved.displayId && model?.SetDisplay) { model.SetDisplay(resolved.displayId); sentDisplay = resolved.displayId; }
+    }
   };
-  return <div className="desktop-frame">{ticket ? <iframe aria-label={`${device.name} 桌面预览`} onLoad={(event) => loaded(event.currentTarget)} sandbox="allow-scripts allow-same-origin" src={ticket.url} /> : <><Monitor /><span>{error || (device.status === "locked" ? "设备已锁屏" : device.status === "online" ? "正在连接桌面" : "设备离线")}</span></>}{viewerError ? <span role="alert">{viewerError}</span> : null}</div>;
-}
-
-function DesktopDetail({ device, ticket, error, onBack, immersive = false }: { device: Device; ticket?: { url: string }; error?: string; onBack: () => void; immersive?: boolean }) {
-  const [viewerError, setViewerError] = useState("");
-  const fullscreen = () => { const element = document.querySelector<HTMLElement>(".single-desktop"); if (element?.requestFullscreen) void element.requestFullscreen(); };
-  const loaded = (frame: HTMLIFrameElement) => {
-    connectMeshViewer(frame, "detail", setViewerError);
+  const sample = (timestamp: number) => {
+    if (cancelled) return;
+    const viewer = frame.contentWindow as MeshSharingWindow | null; const desktop = viewer?.desktop; const tiles = desktop?.m?.TilesDrawn;
+    if (desktop?.State !== 3) { fps.reset(); lastTiles = tiles; } else if (typeof tiles === "number" && lastTiles !== undefined && tiles !== lastTiles) fps.record(timestamp);
+    lastTiles = tiles; if (timestamp - lastReport >= 250) { callbacks.onActualFps(desktop?.State === 3 ? fps.value(timestamp) : 0); lastReport = timestamp; } animationFrame = window.requestAnimationFrame(sample);
   };
-  return <>{immersive ? null : <WorkspaceHeader title={device.name} description={`${device.screenCount} 个显示器 · ${device.architecture}`} actions={<><Button icon={<ChevronLeft size={16} />} onClick={onBack}>返回监控墙</Button><IconButton label="全屏" onClick={fullscreen}><Expand /></IconButton></>} />}<section className={`single-desktop${immersive ? " single-desktop--immersive" : ""}`}>{ticket ? <iframe aria-label={`${device.name} 桌面`} allowFullScreen onLoad={(event) => loaded(event.currentTarget)} sandbox="allow-scripts allow-same-origin" src={ticket.url} /> : <div><Monitor /><StatusBadge status={error ? "error" : device.status === "online" ? "warn" : "muted"}>{error || (device.status === "online" ? "正在创建桌面会话" : statusText(device.status))}</StatusBadge></div>}{viewerError ? <p className="desktop-viewer-error" role="alert">{viewerError}</p> : null}</section></>;
-}
-
-function connectMeshViewer(frame: HTMLIFrameElement, mode: "wall" | "detail", onError: (value: string) => void) {
-  const startedAt = Date.now();
   const attempt = () => {
-    if (!frame.isConnected) return;
-    try {
-      if (configureMeshViewer(frame, mode)) {
-        onError("");
-        return;
-      }
-    } catch (error) {
-      onError(message(error));
-      return;
-    }
-    if (Date.now() - startedAt < 5_000) {
-      window.setTimeout(attempt, 100);
-      return;
-    }
-    onError("MeshCentral 桌面查看器初始化超时");
+    if (cancelled || !frame.isConnected) return;
+    try { if (configureMeshViewer(frame, mode)) { callbacks.onError(""); monitor(); monitorTimer = window.setInterval(monitor, 250); animationFrame = window.requestAnimationFrame(sample); return; } }
+    catch (error) { callbacks.onError(message(error)); return; }
+    if (Date.now() - startedAt < 5_000) { attemptTimer = window.setTimeout(attempt, 100); return; }
+    callbacks.onError("MeshCentral 桌面查看器初始化超时");
   };
-  attempt();
+  attempt(); return () => { cancelled = true; window.clearTimeout(attemptTimer); window.clearInterval(monitorTimer); window.cancelAnimationFrame(animationFrame); callbacks.onActualFps(0); stopMeshViewer(frame); };
 }
 
-function configureMeshViewer(frame: HTMLIFrameElement, mode: "wall" | "detail") {
+function configureMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode) {
   const viewer = frame.contentWindow as MeshSharingWindow | null;
   if (!viewer?.desktopsettings || typeof viewer.connectDesktop !== "function") return false;
-  viewer.desktopsettings.framerate = mode === "wall" ? 1000 : 333;
-  const header = viewer.document.getElementById("deskarea1");
-  const viewport = viewer.document.getElementById("deskarea3x");
-  const footer = viewer.document.getElementById("deskarea4");
-  const screenshot = viewer.document.getElementById("DeskSaveImageButton");
+  viewer.desktopsettings.framerate = frameIntervalByMode[mode];
+  const header = viewer.document.getElementById("deskarea1"); const viewport = viewer.document.getElementById("deskarea3x"); const footer = viewer.document.getElementById("deskarea4"); const screenshot = viewer.document.getElementById("DeskSaveImageButton");
   if (!header || !viewport || !footer || !screenshot) return false;
-  header.style.display = "none";
-  screenshot.style.display = "none";
-  viewport.style.maxHeight = mode === "wall" ? "100vh" : "calc(100vh - 28px)";
-  viewport.style.height = mode === "wall" ? "100vh" : "calc(100vh - 28px)";
-  if (mode === "wall") footer.style.display = "none";
-  if (!viewer.__deskPatrolConnected) {
-    viewer.__deskPatrolConnected = true;
-    try { viewer.connectDesktop(null, 1); }
-    catch (error) { viewer.__deskPatrolConnected = false; throw error; }
-  }
-  return true;
+  header.style.display = "none"; footer.style.display = "none"; screenshot.style.display = "none"; viewport.style.maxHeight = "100vh"; viewport.style.height = "100vh";
+  if (!viewer.__deskPatrolConnected) { viewer.__deskPatrolConnected = true; try { viewer.connectDesktop(null, 1); } catch (error) { viewer.__deskPatrolConnected = false; throw error; } }
+  syncMeshViewer(frame, mode, null); return true;
+}
+
+function syncMeshViewer(frame: HTMLIFrameElement, mode: DesktopViewerMode, selectedDisplayID: number | null) {
+  const viewer = frame.contentWindow as MeshSharingWindow | null; const interval = frameIntervalByMode[mode]; if (!viewer?.desktopsettings) return; viewer.desktopsettings.framerate = interval; const model = viewer.desktop?.m; if (!model) return;
+  model.FrameRateTimer = interval; model.SendCompressionLevel?.(1, viewer.desktopsettings.quality ?? 40, viewer.desktopsettings.scaling ?? 1024, interval); const displays = physicalDisplayIds(model.displays); if (selectedDisplayID !== null && displays.includes(selectedDisplayID) && model.selectedDisplay !== selectedDisplayID) model.SetDisplay?.(selectedDisplayID);
+}
+
+function stopMeshViewer(frame: HTMLIFrameElement) {
+  try { const viewer = frame.contentWindow as MeshSharingWindow | null; viewer?.desktop?.Stop?.(); if (viewer) { viewer.desktop = null; viewer.__deskPatrolConnected = false; } }
+  catch { /* iframe 已导航或卸载时，浏览器会自行关闭对应连接。 */ }
 }
 
 function DevicesPage() {
