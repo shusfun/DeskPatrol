@@ -59,23 +59,33 @@ function buildAgentEvent(agent, type = "agent_stable") {
 }
 
 function scheduleHeartbeat(agent, webServer, timers, delay = 30000) {
+  return scheduleHeartbeatWithSender(agent, webServer, timers, delay, sendEventWithRetry);
+}
+
+function scheduleHeartbeatWithSender(agent, webServer, timers, delay, send) {
   const nodeId = agent.dbNodeKey;
   const previous = timers.get(nodeId);
-  if (previous) clearTimeout(previous);
+  if (previous) clearTimeout(previous.timer);
+  const state = { agent, timer: null };
   const tick = async () => {
-    const connected = webServer?.wsagents?.[nodeId] === agent && agent.authenticated === 2;
+    if (timers.get(nodeId) !== state) return;
+    const currentAgent = webServer?.wsagents?.[nodeId];
+    const connected = currentAgent?.authenticated === 2;
+    if (connected) state.agent = currentAgent;
     try {
-      await sendEventWithRetry(buildAgentEvent(agent, connected ? "agent_heartbeat" : "agent_offline"));
+      await send(buildAgentEvent(state.agent, connected ? "agent_heartbeat" : "agent_offline"));
     } catch (error) {
       console.error("DeskPatrol agent heartbeat failed:", error.message);
     }
+    if (timers.get(nodeId) !== state) return;
     if (!connected) {
       timers.delete(nodeId);
       return;
     }
-    timers.set(nodeId, setTimeout(tick, delay));
+    state.timer = setTimeout(tick, delay);
   };
-  timers.set(nodeId, setTimeout(tick, delay));
+  state.timer = setTimeout(tick, delay);
+  timers.set(nodeId, state);
 }
 
 async function sendEvent(event) {
@@ -220,4 +230,4 @@ function requireConfiguration() {
   return { callbackURL, token };
 }
 
-module.exports._test = { buildAgentEvent, requireConfiguration, buildPowerShellWrapper, parseCommandResult, constantTimeEqual, scheduleHeartbeat };
+module.exports._test = { buildAgentEvent, requireConfiguration, buildPowerShellWrapper, parseCommandResult, constantTimeEqual, scheduleHeartbeat, scheduleHeartbeatWithSender };

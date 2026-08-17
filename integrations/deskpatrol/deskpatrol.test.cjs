@@ -19,6 +19,51 @@ test("心跳事件沿用固定 Agent 标识", () => {
   assert.equal(event.nodeId, "node//abc");
 });
 
+test("Agent 对象替换后仍向当前连接发送心跳", async () => {
+  const nodeId = "node//replacement";
+  const previous = { dbNodeKey: nodeId, dbMeshKey: "mesh//group", name: "PC-01", authenticated: 2, agentInfo: { agentVersion: 1 } };
+  const current = { dbNodeKey: nodeId, dbMeshKey: "mesh//group", name: "PC-01", authenticated: 2, agentInfo: { agentVersion: 2 } };
+  const webServer = { wsagents: { [nodeId]: previous } };
+  const timers = new Map();
+  let resolveEvent;
+  const emitted = new Promise((resolve) => { resolveEvent = resolve; });
+  plugin._test.scheduleHeartbeatWithSender(previous, webServer, timers, 5, async (event) => { resolveEvent(event); });
+  webServer.wsagents[nodeId] = current;
+  const event = await emitted;
+  const state = timers.get(nodeId);
+  clearTimeout(state.timer);
+  timers.delete(nodeId);
+  assert.equal(event.type, "agent_heartbeat");
+  assert.equal(event.agentVersion, 2);
+});
+
+test("过期心跳回调不会清除新连接的定时器", async () => {
+  const nodeId = "node//stale";
+  const previous = { dbNodeKey: nodeId, dbMeshKey: "mesh//group", name: "PC-01", authenticated: 2, agentInfo: {} };
+  const current = { dbNodeKey: nodeId, dbMeshKey: "mesh//group", name: "PC-01", authenticated: 2, agentInfo: {} };
+  const webServer = { wsagents: { [nodeId]: previous } };
+  const timers = new Map();
+  let release;
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const blocked = new Promise((resolve) => { release = resolve; });
+  plugin._test.scheduleHeartbeatWithSender(previous, webServer, timers, 5, async (event) => {
+    assert.equal(event.type, "agent_offline");
+    entered();
+    await blocked;
+  });
+  delete webServer.wsagents[nodeId];
+  await started;
+  webServer.wsagents[nodeId] = current;
+  plugin._test.scheduleHeartbeatWithSender(current, webServer, timers, 1000, async () => {});
+  const currentState = timers.get(nodeId);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(timers.get(nodeId), currentState);
+  clearTimeout(currentState.timer);
+  timers.delete(nodeId);
+});
+
 test("PowerShell 包装器只通过 stdin 解码脚本并解析分离输出", () => {
   const wrapper = plugin._test.buildPowerShellWrapper("Write-Output 'ok'", 30000);
   assert.doesNotMatch(wrapper, /Write-Output 'ok'/);
