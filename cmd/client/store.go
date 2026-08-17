@@ -15,13 +15,14 @@ import (
 )
 
 type LocalState struct {
-	ServerURL        string `json:"serverUrl"`
-	DeviceID         string `json:"deviceId"`
-	DeviceName       string `json:"deviceName"`
-	DeviceToken      string `json:"deviceToken"`
-	AgentSetupStatus string `json:"agentSetupStatus"`
-	AgentSetupError  string `json:"agentSetupError"`
-	AgentNextRetryAt string `json:"agentNextRetryAt"`
+	ServerURL          string `json:"serverUrl"`
+	DeviceID           string `json:"deviceId"`
+	DeviceName         string `json:"deviceName"`
+	DeviceToken        string `json:"deviceToken"`
+	AgentSetupRequired bool   `json:"agentSetupRequired"`
+	AgentSetupStatus   string `json:"agentSetupStatus"`
+	AgentSetupError    string `json:"agentSetupError"`
+	AgentNextRetryAt   string `json:"agentNextRetryAt"`
 }
 
 type LocalStore struct{ dir string }
@@ -61,6 +62,14 @@ func (s *LocalStore) Save(state LocalState) error {
 		return err
 	}
 	return writeProtectedFile(filepath.Join(s.dir, "state.dat"), raw)
+}
+
+func (s *LocalStore) ClearState() error {
+	err := os.Remove(filepath.Join(s.dir, "state.dat"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (s *LocalStore) InstallationID() (string, error) {

@@ -57,14 +57,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS activation_codes (
   id UUID PRIMARY KEY,
   code_hash TEXT NOT NULL UNIQUE,
+	code_ciphertext TEXT,
   label TEXT NOT NULL DEFAULT '',
   expires_at TIMESTAMPTZ NOT NULL,
   used_at TIMESTAMPTZ,
+	revoked_at TIMESTAMPTZ,
+	superseded_at TIMESTAMPTZ,
   installation_id TEXT,
   node_id TEXT,
   created_by BIGINT NOT NULL REFERENCES administrators(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS code_ciphertext TEXT;
+ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS deployment_migrations (
   name TEXT PRIMARY KEY,
   applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -73,6 +79,10 @@ WITH applied AS (
   INSERT INTO deployment_migrations(name) VALUES('2026-08-17-connection-key') ON CONFLICT DO NOTHING RETURNING name
 )
 DELETE FROM activation_codes WHERE used_at IS NULL AND EXISTS (SELECT 1 FROM applied);
+WITH applied AS (
+  INSERT INTO deployment_migrations(name) VALUES('2026-08-17-recoverable-connection-keys') ON CONFLICT DO NOTHING RETURNING name
+)
+DELETE FROM activation_codes WHERE used_at IS NULL AND code_ciphertext IS NULL AND EXISTS (SELECT 1 FROM applied);
 CREATE TABLE IF NOT EXISTS devices (
   id UUID PRIMARY KEY,
   installation_id TEXT NOT NULL UNIQUE,
@@ -84,6 +94,8 @@ CREATE TABLE IF NOT EXISTS devices (
   status TEXT NOT NULL DEFAULT 'pending',
   screen_count INTEGER NOT NULL DEFAULT 1 CHECK (screen_count > 0),
   last_seen_at TIMESTAMPTZ,
+	deleted_at TIMESTAMPTZ,
+	deleted_by BIGINT REFERENCES administrators(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE TABLE IF NOT EXISTS system_settings (
@@ -102,6 +114,8 @@ CREATE TABLE IF NOT EXISTS enrollment_downloads (
 );
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS mesh_id TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS client_token_hash TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES administrators(id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_mesh_id ON devices(mesh_id) WHERE mesh_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_client_token ON devices(client_token_hash) WHERE client_token_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS wall_layouts (

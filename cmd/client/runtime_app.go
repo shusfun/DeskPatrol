@@ -31,6 +31,8 @@ const (
 
 var agentRetryDelays = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, 5 * time.Minute}
 
+var errRemoteDeviceDeleted = errors.New("设备已被管理员删除，请重新激活")
+
 type RuntimeApp struct {
 	mu        sync.RWMutex
 	stateMu   sync.Mutex
@@ -112,21 +114,29 @@ func (a *RuntimeApp) Status() RuntimeStatus {
 		return RuntimeStatus{Architecture: runtime.GOARCH, ClientVersion: buildinfo.Version, MeshAgentStatus: meshAgentServiceStatus(), Connection: "未激活", LastError: err.Error()}
 	}
 	meshStatus, serviceReady := a.service()
-	if state.DeviceID != "" && serviceReady && state.AgentSetupStatus != agentSetupReady {
-		state.AgentSetupStatus = agentSetupReady
-		state.AgentSetupError = ""
-		state.AgentNextRetryAt = ""
-		if err := a.saveState(state); err != nil {
-			a.logger.Error("runtime agent state save failed error=%s", security.Redact(err.Error()))
+	if state.DeviceID != "" && serviceReady && !state.AgentSetupRequired && state.AgentSetupStatus != agentSetupReady {
+		if a.persistAgentSetup(state, agentSetupReady, "", time.Time{}, false) {
+			state.AgentSetupStatus = agentSetupReady
+			state.AgentSetupError = ""
+			state.AgentNextRetryAt = ""
 		}
 	}
 	status := a.localStatus(state, meshStatus)
-	if !status.Activated || status.AgentSetupStatus != agentSetupReady {
+	if !status.Activated {
 		return status
 	}
-	status.Connection = "正在读取 Linux 设备状态"
-	if err := a.refreshRemoteStatus(&status, state); err != nil {
-		status.Connection = "Linux 服务不可达"
+	if err := a.refreshRemoteStatus(&status, state, status.AgentSetupStatus == agentSetupReady); err != nil {
+		if errors.Is(err, errRemoteDeviceDeleted) {
+			if clearErr := a.clearActivation(state); clearErr != nil {
+				status.LastError = clearErr.Error()
+				return status
+			}
+			a.signalAgentSetup()
+			return RuntimeStatus{Architecture: runtime.GOARCH, ClientVersion: buildinfo.Version, MeshAgentStatus: meshStatus, Connection: "设备已删除，请重新激活", LastError: errRemoteDeviceDeleted.Error()}
+		}
+		if status.AgentSetupStatus == agentSetupReady {
+			status.Connection = "Linux 服务不可达"
+		}
 		if status.LastError == "" {
 			status.LastError = err.Error()
 		}
@@ -171,7 +181,7 @@ func normalizeAgentSetupStatus(value string) string {
 	}
 }
 
-func (a *RuntimeApp) refreshRemoteStatus(status *RuntimeStatus, state LocalState) error {
+func (a *RuntimeApp) refreshRemoteStatus(status *RuntimeStatus, state LocalState, updateConnection bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, state.ServerURL+"/api/v1/client/status", nil)
@@ -197,12 +207,18 @@ func (a *RuntimeApp) refreshRemoteStatus(status *RuntimeStatus, state LocalState
 		return fmt.Errorf("Linux 状态响应无法读取: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusGone {
+			return errRemoteDeviceDeleted
+		}
 		return errors.New(firstNonEmpty(envelope.Error, "Linux 状态接口拒绝请求"))
 	}
 	status.DeviceName = envelope.Data.DeviceName
 	status.ScreenCount = envelope.Data.ScreenCount
 	if envelope.Data.LastSeenAt != nil {
 		status.LastHeartbeat = envelope.Data.LastSeenAt.Format(time.RFC3339)
+	}
+	if !updateConnection {
+		return nil
 	}
 	switch envelope.Data.Status {
 	case "online":
@@ -263,9 +279,10 @@ func (a *RuntimeApp) Activate(input ActivationInput) (RuntimeStatus, error) {
 	defer response.Body.Close()
 	var envelope struct {
 		Data struct {
-			DeviceID    string `json:"deviceId"`
-			DeviceName  string `json:"deviceName"`
-			DeviceToken string `json:"deviceToken"`
+			DeviceID           string `json:"deviceId"`
+			DeviceName         string `json:"deviceName"`
+			DeviceToken        string `json:"deviceToken"`
+			AgentSetupRequired bool   `json:"agentSetupRequired"`
 		} `json:"data"`
 		Error string `json:"error"`
 	}
@@ -279,13 +296,21 @@ func (a *RuntimeApp) Activate(input ActivationInput) (RuntimeStatus, error) {
 	if envelope.Data.DeviceID == "" || envelope.Data.DeviceName == "" || envelope.Data.DeviceToken == "" {
 		return a.Status(), errors.New("激活响应缺少设备凭据")
 	}
-	state := LocalState{ServerURL: connection.ServerURL, DeviceID: envelope.Data.DeviceID, DeviceName: envelope.Data.DeviceName, DeviceToken: envelope.Data.DeviceToken, AgentSetupStatus: agentSetupPending}
+	setupStatus := agentSetupPending
+	if !envelope.Data.AgentSetupRequired {
+		if _, ready := a.service(); ready {
+			setupStatus = agentSetupReady
+		}
+	}
+	state := LocalState{ServerURL: connection.ServerURL, DeviceID: envelope.Data.DeviceID, DeviceName: envelope.Data.DeviceName, DeviceToken: envelope.Data.DeviceToken, AgentSetupRequired: envelope.Data.AgentSetupRequired, AgentSetupStatus: setupStatus}
 	if err := a.saveState(state); err != nil {
 		return a.Status(), err
 	}
 	a.logger.Info("runtime activated deviceId=%s server=%s", envelope.Data.DeviceID, connection.ServerURL)
 	go a.flushFrontendErrors()
-	time.AfterFunc(time.Second, a.startAgentSetup)
+	if setupStatus != agentSetupReady {
+		time.AfterFunc(time.Second, a.startAgentSetup)
+	}
 	meshStatus, _ := a.service()
 	return a.localStatus(state, meshStatus), nil
 }
@@ -349,20 +374,26 @@ func (a *RuntimeApp) runAgentSetup() {
 		if err != nil || state.DeviceID == "" || state.ServerURL == "" || state.DeviceToken == "" {
 			return
 		}
-		if _, ready := a.service(); ready {
-			a.persistAgentSetup(state, agentSetupReady, "", time.Time{})
+		if _, ready := a.service(); ready && !state.AgentSetupRequired {
+			a.persistAgentSetup(state, agentSetupReady, "", time.Time{}, false)
 			return
 		}
 		err = a.prepareAndInstallAgent(state)
 		if err == nil {
-			a.persistAgentSetup(state, agentSetupReady, "", time.Time{})
+			a.persistAgentSetup(state, agentSetupReady, "", time.Time{}, false)
+			return
+		}
+		if errors.Is(err, errRemoteDeviceDeleted) {
+			_ = a.clearActivation(state)
 			return
 		}
 		delay := agentRetryDelays[min(attempt, len(agentRetryDelays)-1)]
 		attempt++
 		nextRetry := time.Now().Add(delay)
 		safeError := security.Redact(err.Error())
-		a.persistAgentSetup(state, agentSetupFailed, safeError, nextRetry)
+		if !a.persistAgentSetup(state, agentSetupFailed, safeError, nextRetry, state.AgentSetupRequired) {
+			return
+		}
 		a.logger.Error("runtime agent setup failed deviceId=%s error=%s", state.DeviceID, safeError)
 		timer := time.NewTimer(delay)
 		select {
@@ -380,7 +411,9 @@ func (a *RuntimeApp) runAgentSetup() {
 }
 
 func (a *RuntimeApp) prepareAndInstallAgent(state LocalState) error {
-	a.persistAgentSetup(state, agentSetupPreparing, "", time.Time{})
+	if !a.persistAgentSetup(state, agentSetupPreparing, "", time.Time{}, state.AgentSetupRequired) {
+		return errRemoteDeviceDeleted
+	}
 	requestContext, cancel := context.WithTimeout(context.Background(), 135*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, state.ServerURL+"/api/v1/client/agent/prepare", nil)
@@ -405,12 +438,17 @@ func (a *RuntimeApp) prepareAndInstallAgent(state LocalState) error {
 		return fmt.Errorf("Agent 准备响应无法读取: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusGone {
+			return errRemoteDeviceDeleted
+		}
 		return errors.New(firstNonEmpty(envelope.Error, "Linux Agent 准备失败"))
 	}
 	if !validAgentDownloadURL(state.ServerURL, envelope.Data.AgentDownloadURL) || len(envelope.Data.AgentSHA256) != 64 || envelope.Data.AgentSize < 1024 || envelope.Data.AgentSize > 256<<20 {
 		return errors.New("Agent 准备响应不正确")
 	}
-	a.persistAgentSetup(state, agentSetupInstalling, "", time.Time{})
+	if !a.persistAgentSetup(state, agentSetupInstalling, "", time.Time{}, state.AgentSetupRequired) {
+		return errRemoteDeviceDeleted
+	}
 	if err := a.installer(envelope.Data.AgentDownloadURL, envelope.Data.AgentSHA256); err != nil {
 		return err
 	}
@@ -432,7 +470,14 @@ func validAgentDownloadURL(serverURL, downloadURL string) bool {
 	return len(strings.TrimPrefix(download.Path, "/api/v1/client/agent/")) >= 20
 }
 
-func (a *RuntimeApp) persistAgentSetup(state LocalState, status, setupError string, nextRetry time.Time) {
+func (a *RuntimeApp) persistAgentSetup(expected LocalState, status, setupError string, nextRetry time.Time, setupRequired bool) bool {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	state, err := a.store.Load()
+	if err != nil || state.DeviceID != expected.DeviceID || state.DeviceToken != expected.DeviceToken {
+		return false
+	}
+	state.AgentSetupRequired = setupRequired
 	state.AgentSetupStatus = status
 	state.AgentSetupError = setupError
 	if nextRetry.IsZero() {
@@ -440,9 +485,24 @@ func (a *RuntimeApp) persistAgentSetup(state LocalState, status, setupError stri
 	} else {
 		state.AgentNextRetryAt = nextRetry.Format(time.RFC3339)
 	}
-	if err := a.saveState(state); err != nil {
+	if err := a.store.Save(state); err != nil {
 		a.logger.Error("runtime agent state save failed error=%s", security.Redact(err.Error()))
+		return false
 	}
+	return true
+}
+
+func (a *RuntimeApp) clearActivation(expected LocalState) error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	state, err := a.store.Load()
+	if err != nil {
+		return err
+	}
+	if state.DeviceID != expected.DeviceID || state.DeviceToken != expected.DeviceToken {
+		return nil
+	}
+	return a.store.ClearState()
 }
 
 func (a *RuntimeApp) loadState() (LocalState, error) {

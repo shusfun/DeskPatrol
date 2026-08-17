@@ -22,6 +22,7 @@ import (
 	"deskpatrol/internal/appconfig"
 	"deskpatrol/internal/buildinfo"
 	"deskpatrol/internal/connectionkey"
+	"deskpatrol/internal/credentialcrypto"
 	"deskpatrol/internal/database"
 	"deskpatrol/internal/meshcentral"
 	"deskpatrol/internal/releasesync"
@@ -33,6 +34,8 @@ import (
 )
 
 const sessionCookie = "deskpatrol_session"
+
+var errDeviceDeleted = errors.New("设备已被管理员删除，请重新激活")
 
 type App struct {
 	configPath string
@@ -96,11 +99,13 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("POST /api/v1/auth/logout", a.auth(http.HandlerFunc(a.logout)))
 	mux.Handle("GET /api/v1/auth/me", a.auth(http.HandlerFunc(a.me)))
 	mux.Handle("GET /api/v1/devices", a.auth(http.HandlerFunc(a.listDevices)))
+	mux.Handle("DELETE /api/v1/devices/{id}", a.auth(http.HandlerFunc(a.deleteDevice)))
 	mux.Handle("POST /api/v1/devices/{id}/desktop-ticket", a.auth(http.HandlerFunc(a.createDesktopTicket)))
 	mux.Handle("GET /api/v1/wall-layout", a.auth(http.HandlerFunc(a.getWallLayout)))
 	mux.Handle("PUT /api/v1/wall-layout", a.auth(http.HandlerFunc(a.putWallLayout)))
 	mux.Handle("GET /api/v1/activation-codes", a.auth(http.HandlerFunc(a.listActivationCodes)))
 	mux.Handle("POST /api/v1/activation-codes", a.auth(http.HandlerFunc(a.createActivationCode)))
+	mux.Handle("POST /api/v1/activation-codes/{id}/copy", a.auth(http.HandlerFunc(a.copyActivationCode)))
 	mux.HandleFunc("POST /api/v1/client/activate", a.activateClient)
 	mux.HandleFunc("POST /api/v1/client/agent/prepare", a.prepareEnrollmentAgent)
 	mux.HandleFunc("GET /api/v1/client/agent/{token}", a.downloadEnrollmentAgent)
@@ -259,12 +264,21 @@ func (a *App) meshCentralEvent(w http.ResponseWriter, r *http.Request) {
 		if event.Type == "agent_offline" {
 			status = "offline"
 		}
-		result, err := pool.Exec(r.Context(), `UPDATE devices SET status=$2,last_seen_at=CASE WHEN $2='online' THEN NOW() ELSE last_seen_at END WHERE node_id=$1`, event.NodeID, status)
+		result, err := pool.Exec(r.Context(), `UPDATE devices SET status=$2,last_seen_at=CASE WHEN $2='online' THEN NOW() ELSE last_seen_at END WHERE node_id=$1 AND deleted_at IS NULL`, event.NodeID, status)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if result.RowsAffected() != 1 {
+			deleted, deletedErr := meshEventMatchesDeletedDevice(r.Context(), pool, event.NodeID, event.MeshID)
+			if deletedErr != nil {
+				writeError(w, http.StatusInternalServerError, deletedErr)
+				return
+			}
+			if deleted {
+				writeJSON(w, http.StatusOK, map[string]bool{"accepted": true, "ignored": true})
+				return
+			}
 			writeError(w, http.StatusConflict, errors.New("MeshCentral NodeID 尚未绑定激活记录"))
 			return
 		}
@@ -278,8 +292,17 @@ func (a *App) meshCentralEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	var deviceID string
-	err = tx.QueryRow(r.Context(), `SELECT id FROM devices WHERE node_id=$1 OR (node_id IS NULL AND mesh_id=$2) FOR UPDATE`, event.NodeID, event.MeshID).Scan(&deviceID)
+	err = tx.QueryRow(r.Context(), `SELECT id FROM devices WHERE deleted_at IS NULL AND (node_id=$1 OR (node_id IS NULL AND mesh_id=$2)) FOR UPDATE`, event.NodeID, event.MeshID).Scan(&deviceID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		deleted, deletedErr := meshEventMatchesDeletedDevice(r.Context(), pool, event.NodeID, event.MeshID)
+		if deletedErr != nil {
+			writeError(w, http.StatusInternalServerError, deletedErr)
+			return
+		}
+		if deleted {
+			writeJSON(w, http.StatusOK, map[string]bool{"accepted": true, "ignored": true})
+			return
+		}
 		writeError(w, http.StatusConflict, errors.New("MeshCentral NodeID 尚未绑定激活记录"))
 		return
 	}
@@ -312,6 +335,12 @@ func (a *App) meshCentralEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"accepted": true})
+}
+
+func meshEventMatchesDeletedDevice(ctx context.Context, pool *pgxpool.Pool, nodeID, meshID string) (bool, error) {
+	var found bool
+	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE deleted_at IS NOT NULL AND (node_id=$1 OR (node_id IS NULL AND mesh_id=$2)))`, nodeID, meshID).Scan(&found)
+	return found, err
 }
 
 func (a *App) releaseService() *releasesync.Service {
@@ -446,7 +475,7 @@ func (a *App) debugAuth(next http.Handler) http.Handler {
 
 func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,name,architecture,status,screen_count,last_seen_at,created_at FROM devices ORDER BY created_at DESC`)
+	rows, err := pool.Query(r.Context(), `SELECT id,name,architecture,status,screen_count,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -470,6 +499,61 @@ func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (a *App) deleteDevice(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(principalKey).(principal)
+	_, pool, err := a.snapshot()
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err)
+		return
+	}
+	tx, err := pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	deviceID := r.PathValue("id")
+	if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, deviceID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("获取设备删除锁失败: %w", err))
+		return
+	}
+	var installationID string
+	err = tx.QueryRow(r.Context(), `SELECT installation_id FROM devices WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, deviceID).Scan(&installationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, errors.New("设备不存在或已经删除"))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE devices SET deleted_at=NOW(),deleted_by=$2,status='deleted' WHERE id=$1`, deviceID, user.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("删除设备失败: %w", err))
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE activation_codes SET revoked_at=COALESCE(revoked_at,NOW()),code_ciphertext=NULL WHERE installation_id=$1`, installationID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("撤销设备连接密钥失败: %w", err))
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE debug_sessions SET closed_at=COALESCE(closed_at,NOW()) WHERE device_id=$1`, deviceID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("关闭设备诊断会话失败: %w", err))
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `DELETE FROM enrollment_downloads WHERE device_id=$1`, deviceID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("废止 Agent 下载票据失败: %w", err))
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE wall_layouts SET device_order=(SELECT COALESCE(jsonb_agg(element),'[]'::jsonb) FROM jsonb_array_elements(device_order) AS element WHERE element<>to_jsonb($1::text)) WHERE device_order @> jsonb_build_array($1::text)`, deviceID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("清理监控墙设备顺序失败: %w", err))
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("提交设备删除事务失败: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
 func (a *App) createDesktopTicket(w http.ResponseWriter, r *http.Request) {
 	cfg, pool, err := a.snapshot()
 	if err != nil {
@@ -478,7 +562,7 @@ func (a *App) createDesktopTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	var nodeID, status string
 	var lastSeen *time.Time
-	if err := pool.QueryRow(r.Context(), `SELECT node_id,status,last_seen_at FROM devices WHERE id=$1 AND node_id IS NOT NULL`, r.PathValue("id")).Scan(&nodeID, &status, &lastSeen); err != nil {
+	if err := pool.QueryRow(r.Context(), `SELECT node_id,status,last_seen_at FROM devices WHERE id=$1 AND node_id IS NOT NULL AND deleted_at IS NULL`, r.PathValue("id")).Scan(&nodeID, &status, &lastSeen); err != nil {
 		writeError(w, http.StatusNotFound, errors.New("设备不存在或尚未完成连接"))
 		return
 	}
@@ -544,7 +628,11 @@ func (a *App) putWallLayout(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listActivationCodes(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,label,expires_at,used_at,created_at FROM activation_codes ORDER BY created_at DESC LIMIT 200`)
+	if _, err := pool.Exec(r.Context(), `UPDATE activation_codes SET code_ciphertext=NULL WHERE used_at IS NULL AND expires_at<=NOW() AND code_ciphertext IS NOT NULL`); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("清理过期连接密钥失败: %w", err))
+		return
+	}
+	rows, err := pool.Query(r.Context(), `SELECT id,label,expires_at,used_at,revoked_at,superseded_at,code_ciphertext,created_at FROM activation_codes ORDER BY created_at DESC LIMIT 200`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -554,14 +642,32 @@ func (a *App) listActivationCodes(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, label string
 		var expires, created time.Time
-		var used *time.Time
-		if err := rows.Scan(&id, &label, &expires, &used, &created); err != nil {
+		var used, revoked, superseded *time.Time
+		var ciphertext *string
+		if err := rows.Scan(&id, &label, &expires, &used, &revoked, &superseded, &ciphertext, &created); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "label": label, "expiresAt": expires, "usedAt": used, "createdAt": created})
+		status := activationCodeStatus(expires, used, revoked, superseded)
+		items = append(items, map[string]any{"id": id, "label": label, "expiresAt": expires, "usedAt": used, "createdAt": created, "status": status, "canCopy": status == "unused" && ciphertext != nil && *ciphertext != ""})
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func activationCodeStatus(expires time.Time, used, revoked, superseded *time.Time) string {
+	if revoked != nil {
+		return "revoked"
+	}
+	if superseded != nil {
+		return "superseded"
+	}
+	if used != nil {
+		return "used"
+	}
+	if !time.Now().Before(expires) {
+		return "expired"
+	}
+	return "unused"
 }
 
 func (a *App) createActivationCode(w http.ResponseWriter, r *http.Request) {
@@ -593,11 +699,93 @@ func (a *App) createActivationCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("生成连接密钥失败: %w", err))
 		return
 	}
-	if _, err := pool.Exec(r.Context(), `INSERT INTO activation_codes(id,code_hash,label,expires_at,created_by) VALUES($1,$2,$3,$4,$5)`, id, hash(code), strings.TrimSpace(req.Label), expires, user.ID); err != nil {
+	cipher, err := credentialcrypto.New(cfg.SessionSecret)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("初始化连接密钥加密失败: %w", err))
+		return
+	}
+	ciphertext, err := cipher.Encrypt(code, []byte("activation-code:"+id))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("加密连接密钥失败: %w", err))
+		return
+	}
+	if _, err := pool.Exec(r.Context(), `INSERT INTO activation_codes(id,code_hash,code_ciphertext,label,expires_at,created_by) VALUES($1,$2,$3,$4,$5,$6)`, id, hash(code), ciphertext, strings.TrimSpace(req.Label), expires, user.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "connectionKey": connectionKey, "expiresAt": expires})
+}
+
+func (a *App) copyActivationCode(w http.ResponseWriter, r *http.Request) {
+	cfg, pool, err := a.snapshot()
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err)
+		return
+	}
+	tx, err := pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var codeHash, ciphertext string
+	var expires time.Time
+	var used, revoked, superseded *time.Time
+	err = tx.QueryRow(r.Context(), `SELECT code_hash,COALESCE(code_ciphertext,''),expires_at,used_at,revoked_at,superseded_at FROM activation_codes WHERE id=$1 FOR UPDATE`, r.PathValue("id")).Scan(&codeHash, &ciphertext, &expires, &used, &revoked, &superseded)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, errors.New("连接密钥不存在"))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	switch activationCodeStatus(expires, used, revoked, superseded) {
+	case "used":
+		writeError(w, http.StatusConflict, errors.New("连接密钥已经使用，不能再次复制"))
+		return
+	case "expired":
+		if _, err := tx.Exec(r.Context(), `UPDATE activation_codes SET code_ciphertext=NULL WHERE id=$1`, r.PathValue("id")); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("清理过期连接密钥失败: %w", err))
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeError(w, http.StatusGone, errors.New("连接密钥已过期，请重新生成"))
+		return
+	case "superseded":
+		writeError(w, http.StatusConflict, errors.New("连接密钥已被新密钥替换"))
+		return
+	case "revoked":
+		writeError(w, http.StatusConflict, errors.New("连接密钥已撤销"))
+		return
+	}
+	if ciphertext == "" {
+		writeError(w, http.StatusConflict, errors.New("旧版本连接密钥无法恢复，请重新生成"))
+		return
+	}
+	cipher, err := credentialcrypto.New(cfg.SessionSecret)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("初始化连接密钥解密失败: %w", err))
+		return
+	}
+	code, err := cipher.Decrypt(ciphertext, []byte("activation-code:"+r.PathValue("id")))
+	if err != nil || hash(code) != codeHash {
+		writeError(w, http.StatusInternalServerError, errors.New("连接密钥密文校验失败"))
+		return
+	}
+	connectionKey, err := connectionkey.Build(cfg.PublicURL, code)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("生成连接密钥失败: %w", err))
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "connectionKey": connectionKey, "expiresAt": expires})
 }
 
 func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
@@ -633,7 +821,8 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 	var expiresAt time.Time
 	var usedAt *time.Time
 	var boundInstallation *string
-	err = tx.QueryRow(r.Context(), `SELECT id,expires_at,used_at,installation_id FROM activation_codes WHERE code_hash=$1 FOR UPDATE`, hash(strings.TrimSpace(req.Code))).Scan(&codeID, &expiresAt, &usedAt, &boundInstallation)
+	var revokedAt, supersededAt *time.Time
+	err = tx.QueryRow(r.Context(), `SELECT id,expires_at,used_at,installation_id,revoked_at,superseded_at FROM activation_codes WHERE code_hash=$1 FOR UPDATE`, hash(strings.TrimSpace(req.Code))).Scan(&codeID, &expiresAt, &usedAt, &boundInstallation, &revokedAt, &supersededAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, errors.New("激活码不存在"))
 		return
@@ -642,7 +831,23 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if revokedAt != nil {
+		writeError(w, http.StatusConflict, errors.New("连接密钥已撤销，请生成新密钥"))
+		return
+	}
+	if supersededAt != nil {
+		writeError(w, http.StatusConflict, errors.New("连接密钥已被新密钥替换，请使用最新密钥"))
+		return
+	}
 	if time.Now().After(expiresAt) {
+		if _, err := tx.Exec(r.Context(), `UPDATE activation_codes SET code_ciphertext=NULL WHERE id=$1`, codeID); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("清理过期连接密钥失败: %w", err))
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeError(w, http.StatusGone, errors.New("激活码已过期"))
 		return
 	}
@@ -651,30 +856,43 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var deviceID, deviceName string
+	var nodeID *string
 	newEnrollment := usedAt == nil
 	if !newEnrollment {
-		err = tx.QueryRow(r.Context(), `SELECT id,name FROM devices WHERE installation_id=$1`, req.InstallationID).Scan(&deviceID, &deviceName)
+		err = tx.QueryRow(r.Context(), `SELECT id,name,node_id FROM devices WHERE installation_id=$1 AND deleted_at IS NULL FOR UPDATE`, req.InstallationID).Scan(&deviceID, &deviceName, &nodeID)
 		if err != nil {
 			writeError(w, http.StatusConflict, errors.New("激活恢复记录不存在，请联系管理员"))
 			return
 		}
 	} else {
-		existingErr := tx.QueryRow(r.Context(), `SELECT id FROM devices WHERE installation_id=$1`, req.InstallationID).Scan(&deviceID)
-		if existingErr == nil {
-			writeError(w, http.StatusConflict, errors.New("安装 ID 已绑定其他激活记录"))
-			return
-		}
+		existingErr := tx.QueryRow(r.Context(), `SELECT id,name,node_id FROM devices WHERE installation_id=$1 FOR UPDATE`, req.InstallationID).Scan(&deviceID, &deviceName, &nodeID)
 		if !errors.Is(existingErr, pgx.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, existingErr)
+			if existingErr != nil {
+				writeError(w, http.StatusInternalServerError, existingErr)
+				return
+			}
+			status := "offline"
+			if nodeID == nil || strings.TrimSpace(*nodeID) == "" {
+				status = "pending"
+			}
+			deviceName = strings.TrimSpace(req.DeviceName)
+			if _, err := tx.Exec(r.Context(), `UPDATE devices SET name=$2,architecture=$3,status=$4,deleted_at=NULL,deleted_by=NULL WHERE id=$1`, deviceID, deviceName, req.Architecture, status); err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("恢复设备激活记录失败: %w", err))
+				return
+			}
+		} else {
+			deviceID, _ = uuid()
+			deviceName = strings.TrimSpace(req.DeviceName)
+			if _, err := tx.Exec(r.Context(), `INSERT INTO devices(id,installation_id,name,architecture,status) VALUES($1,$2,$3,$4,'pending')`, deviceID, req.InstallationID, deviceName, req.Architecture); err != nil {
+				writeError(w, http.StatusConflict, fmt.Errorf("创建设备激活记录失败: %w", err))
+				return
+			}
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE activation_codes SET superseded_at=NOW(),code_ciphertext=NULL WHERE installation_id=$1 AND id<>$2 AND revoked_at IS NULL AND superseded_at IS NULL`, req.InstallationID, codeID); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("替换旧连接密钥失败: %w", err))
 			return
 		}
-		deviceID, _ = uuid()
-		deviceName = strings.TrimSpace(req.DeviceName)
-		if _, err := tx.Exec(r.Context(), `INSERT INTO devices(id,installation_id,name,architecture,status) VALUES($1,$2,$3,$4,'pending')`, deviceID, req.InstallationID, deviceName, req.Architecture); err != nil {
-			writeError(w, http.StatusConflict, fmt.Errorf("创建设备激活记录失败: %w", err))
-			return
-		}
-		if _, err := tx.Exec(r.Context(), `UPDATE activation_codes SET used_at=NOW(),installation_id=$2 WHERE id=$1`, codeID, req.InstallationID); err != nil {
+		if _, err := tx.Exec(r.Context(), `UPDATE activation_codes SET used_at=NOW(),installation_id=$2,code_ciphertext=NULL WHERE id=$1`, codeID, req.InstallationID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -693,7 +911,7 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[bool]int{true: http.StatusCreated, false: http.StatusOK}[newEnrollment], map[string]any{
-		"deviceId": deviceID, "deviceName": deviceName, "deviceToken": deviceToken,
+		"deviceId": deviceID, "deviceName": deviceName, "deviceToken": deviceToken, "agentSetupRequired": nodeID == nil || strings.TrimSpace(*nodeID) == "",
 	})
 }
 
@@ -705,7 +923,7 @@ func (a *App) prepareEnrollmentAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID, err := authenticateDevice(r, pool)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, errors.New("设备认证失败"))
+		writeDeviceAuthError(w, err)
 		return
 	}
 	connection, err := pool.Acquire(r.Context())
@@ -734,8 +952,13 @@ func (a *App) prepareEnrollmentAgent(w http.ResponseWriter, r *http.Request) {
 
 	var architecture string
 	var meshID *string
-	if err := connection.QueryRow(r.Context(), `SELECT architecture,mesh_id FROM devices WHERE id=$1`, deviceID).Scan(&architecture, &meshID); err != nil {
+	var deletedAt *time.Time
+	if err := connection.QueryRow(r.Context(), `SELECT architecture,mesh_id,deleted_at FROM devices WHERE id=$1`, deviceID).Scan(&architecture, &meshID, &deletedAt); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if deletedAt != nil {
+		writeError(w, http.StatusGone, errDeviceDeleted)
 		return
 	}
 	var agentPath, agentSHA string
@@ -862,7 +1085,7 @@ func (a *App) ingestClientErrors(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID, err := authenticateDevice(r, pool)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, errors.New("设备认证失败"))
+		writeDeviceAuthError(w, err)
 		return
 	}
 	var req struct {
@@ -914,7 +1137,7 @@ func (a *App) clientStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID, err := authenticateDevice(r, pool)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, errors.New("设备认证失败"))
+		writeDeviceAuthError(w, err)
 		return
 	}
 	var name, status string
@@ -936,10 +1159,22 @@ func authenticateDevice(r *http.Request, pool *pgxpool.Pool) (string, error) {
 		return "", errors.New("设备令牌缺失")
 	}
 	var deviceID string
-	if err := pool.QueryRow(r.Context(), `SELECT id FROM devices WHERE client_token_hash=$1`, hash(strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")))).Scan(&deviceID); err != nil {
+	var deletedAt *time.Time
+	if err := pool.QueryRow(r.Context(), `SELECT id,deleted_at FROM devices WHERE client_token_hash=$1`, hash(strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")))).Scan(&deviceID, &deletedAt); err != nil {
 		return "", err
 	}
+	if deletedAt != nil {
+		return "", errDeviceDeleted
+	}
 	return deviceID, nil
+}
+
+func writeDeviceAuthError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errDeviceDeleted) {
+		writeError(w, http.StatusGone, errDeviceDeleted)
+		return
+	}
+	writeError(w, http.StatusUnauthorized, errors.New("设备认证失败"))
 }
 
 func (a *App) listDownloads(w http.ResponseWriter, r *http.Request) {
