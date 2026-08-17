@@ -6,6 +6,14 @@ import { Button, Field, StatusBadge, ThemeControl } from "@deskpatrol/ui-admin";
 import "@deskpatrol/ui-admin/styles.css";
 import "./styles.css";
 
+const runtimeModulePath = "/wails/runtime.js";
+let runtimeLoadError = "";
+try {
+  await import(/* @vite-ignore */ runtimeModulePath);
+} catch (error) {
+  runtimeLoadError = text(error);
+}
+
 type Status = { activated: boolean; serverUrl: string; deviceId: string; deviceName: string; architecture: string; clientVersion: string; meshAgentStatus: string; connection: string; lastHeartbeat: string; screenCount: number; lastError: string };
 type LogEntry = { timestamp: string; level: "INFO" | "ERROR"; message: string };
 const bridge = {
@@ -54,5 +62,10 @@ function Diagnostics({ status }: { status: Status }) {
 function Row({ label, value }: { label: string; value: string }) { return <div className="row"><dt>{label}</dt><dd>{value}</dd></div>; }
 function IconAction({ label, children, onClick }: { label: string; children: ReactNode; onClick: () => void }) { return <button aria-label={label} className="icon-action" title={label} onClick={onClick}>{children}</button>; }
 function text(error: unknown) { return String(error instanceof Error ? error.message : error).replace(/^Error:\s*/, ""); }
+
+function RuntimeUnavailable({ error }: { error: string }) {
+  return <main className="loading runtime-unavailable"><Activity /><div><strong>客户端运行时无法加载</strong><p>{error || "Wails Runtime 未响应"}</p><small>请重新安装 DeskPatrol，或联系管理员提供这台设备的 Runtime 日志。</small></div></main>;
+}
+
 initializeTheme();
-createRoot(document.getElementById("root")!).render(<ThemeProvider><ClientErrorBoundary><App /></ClientErrorBoundary></ThemeProvider>);
+createRoot(document.getElementById("root")!).render(runtimeLoadError ? <RuntimeUnavailable error={runtimeLoadError} /> : <ThemeProvider><ClientErrorBoundary><App /></ClientErrorBoundary></ThemeProvider>);
