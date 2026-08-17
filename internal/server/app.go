@@ -575,13 +575,23 @@ func (a *App) createDesktopTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, fmt.Errorf("创建桌面查看票据失败: %w", err))
 		return
 	}
-	publicOrigin, _ := url.Parse(cfg.PublicURL)
-	parsed, err := url.Parse(shareURL)
-	if err != nil || !sameHTTPSOrigin(parsed, publicOrigin) || parsed.Path != "/sharing" {
+	shareURL, err = canonicalDesktopShareURL(shareURL, cfg.PublicURL)
+	if err != nil {
 		writeError(w, http.StatusBadGateway, errors.New("MeshCentral 返回了非本站桌面分享地址"))
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"url": shareURL, "expiresAt": time.Now().Add(5 * time.Minute), "viewOnly": true})
+}
+
+func canonicalDesktopShareURL(shareURL, publicURL string) (string, error) {
+	publicOrigin, publicErr := url.Parse(publicURL)
+	parsed, shareErr := url.Parse(shareURL)
+	if publicErr != nil || shareErr != nil || !sameHTTPSOrigin(parsed, publicOrigin) || parsed.Path != "/sharing" {
+		return "", errors.New("桌面分享地址不正确")
+	}
+	parsed.Scheme = publicOrigin.Scheme
+	parsed.Host = publicOrigin.Host
+	return parsed.String(), nil
 }
 
 func sameHTTPSOrigin(left, right *url.URL) bool {
