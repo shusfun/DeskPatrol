@@ -29,6 +29,9 @@ func TestWriteConfigPinsSecurityAndDatabase(t *testing.T) {
 		t.Fatalf("MeshCentral 安全配置不正确: %#v", settings)
 	}
 	domain := value["domains"].(map[string]any)[""].(map[string]any)
+	if domain["certUrl"] != "https://127.0.0.1:18130" {
+		t.Fatalf("MeshCentral 未从本机 TLS bridge 加载公网证书: %#v", domain["certUrl"])
+	}
 	if _, exists := domain["loginKey"]; exists {
 		t.Fatal("MeshCentral 域 loginKey 是页面访问门槛，不得用于 meshctrl 内部认证")
 	}

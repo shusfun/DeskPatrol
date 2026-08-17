@@ -16,6 +16,7 @@ import (
 
 	"deskpatrol/internal/appconfig"
 	"deskpatrol/internal/database"
+	"deskpatrol/internal/meshcentral"
 	"deskpatrol/internal/server"
 )
 
@@ -104,6 +105,9 @@ func migrate(args []string) error {
 	defer pool.Close()
 	if _, err := pool.Exec(ctx, database.Schema); err != nil {
 		return fmt.Errorf("执行数据库迁移失败: %w", err)
+	}
+	if err := meshcentral.WriteDeploymentFiles(filepath.Dir(filepath.Clean(*configPath)), cfg); err != nil {
+		return fmt.Errorf("更新 MeshCentral 运行配置失败: %w", err)
 	}
 	fmt.Println("DeskPatrol 数据库迁移完成")
 	return nil
