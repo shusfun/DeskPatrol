@@ -12,6 +12,7 @@ type AuditLog = { id: number; operation: string; scriptSha256: string; durationM
 type MeshSharingWindow = Window & typeof globalThis & {
   connectDesktop?: (event: null, connectionType: number) => void;
   desktopsettings?: { framerate?: number };
+  __deskPatrolConnected?: boolean;
 };
 
 export function App() {
@@ -174,8 +175,7 @@ function WallPage() {
 function DesktopFrame({ device, ticket, error }: { device: Device; ticket?: { url: string }; error?: string }) {
   const [viewerError, setViewerError] = useState("");
   const loaded = (frame: HTMLIFrameElement) => {
-    try { configureMeshViewer(frame, "wall"); setViewerError(""); }
-    catch (error) { setViewerError(message(error)); }
+    connectMeshViewer(frame, "wall", setViewerError);
   };
   return <div className="desktop-frame">{ticket ? <iframe aria-label={`${device.name} 桌面预览`} onLoad={(event) => loaded(event.currentTarget)} sandbox="allow-scripts allow-same-origin" src={ticket.url} /> : <><Monitor /><span>{error || (device.status === "locked" ? "设备已锁屏" : device.status === "online" ? "正在连接桌面" : "设备离线")}</span></>}{viewerError ? <span role="alert">{viewerError}</span> : null}</div>;
 }
@@ -184,27 +184,53 @@ function DesktopDetail({ device, ticket, error, onBack, immersive = false }: { d
   const [viewerError, setViewerError] = useState("");
   const fullscreen = () => { const element = document.querySelector<HTMLElement>(".single-desktop"); if (element?.requestFullscreen) void element.requestFullscreen(); };
   const loaded = (frame: HTMLIFrameElement) => {
-    try { configureMeshViewer(frame, "detail"); setViewerError(""); }
-    catch (error) { setViewerError(message(error)); }
+    connectMeshViewer(frame, "detail", setViewerError);
   };
   return <>{immersive ? null : <WorkspaceHeader title={device.name} description={`${device.screenCount} 个显示器 · ${device.architecture}`} actions={<><Button icon={<ChevronLeft size={16} />} onClick={onBack}>返回监控墙</Button><IconButton label="全屏" onClick={fullscreen}><Expand /></IconButton></>} />}<section className={`single-desktop${immersive ? " single-desktop--immersive" : ""}`}>{ticket ? <iframe aria-label={`${device.name} 桌面`} allowFullScreen onLoad={(event) => loaded(event.currentTarget)} sandbox="allow-scripts allow-same-origin" src={ticket.url} /> : <div><Monitor /><StatusBadge status={error ? "error" : device.status === "online" ? "warn" : "muted"}>{error || (device.status === "online" ? "正在创建桌面会话" : statusText(device.status))}</StatusBadge></div>}{viewerError ? <p className="desktop-viewer-error" role="alert">{viewerError}</p> : null}</section></>;
 }
 
+function connectMeshViewer(frame: HTMLIFrameElement, mode: "wall" | "detail", onError: (value: string) => void) {
+  const startedAt = Date.now();
+  const attempt = () => {
+    if (!frame.isConnected) return;
+    try {
+      if (configureMeshViewer(frame, mode)) {
+        onError("");
+        return;
+      }
+    } catch (error) {
+      onError(message(error));
+      return;
+    }
+    if (Date.now() - startedAt < 5_000) {
+      window.setTimeout(attempt, 100);
+      return;
+    }
+    onError("MeshCentral 桌面查看器初始化超时");
+  };
+  attempt();
+}
+
 function configureMeshViewer(frame: HTMLIFrameElement, mode: "wall" | "detail") {
   const viewer = frame.contentWindow as MeshSharingWindow | null;
-  if (!viewer?.desktopsettings || typeof viewer.connectDesktop !== "function") throw new Error("MeshCentral 桌面查看器初始化失败");
+  if (!viewer?.desktopsettings || typeof viewer.connectDesktop !== "function") return false;
   viewer.desktopsettings.framerate = mode === "wall" ? 1000 : 333;
   const header = viewer.document.getElementById("deskarea1");
   const viewport = viewer.document.getElementById("deskarea3x");
   const footer = viewer.document.getElementById("deskarea4");
   const screenshot = viewer.document.getElementById("DeskSaveImageButton");
-  if (!header || !viewport || !footer || !screenshot) throw new Error("MeshCentral 桌面查看器版本不兼容");
+  if (!header || !viewport || !footer || !screenshot) return false;
   header.style.display = "none";
   screenshot.style.display = "none";
   viewport.style.maxHeight = mode === "wall" ? "100vh" : "calc(100vh - 28px)";
   viewport.style.height = mode === "wall" ? "100vh" : "calc(100vh - 28px)";
   if (mode === "wall") footer.style.display = "none";
-  viewer.connectDesktop(null, 1);
+  if (!viewer.__deskPatrolConnected) {
+    viewer.__deskPatrolConnected = true;
+    try { viewer.connectDesktop(null, 1); }
+    catch (error) { viewer.__deskPatrolConnected = false; throw error; }
+  }
+  return true;
 }
 
 function DevicesPage() {

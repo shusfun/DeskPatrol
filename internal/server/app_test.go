@@ -139,3 +139,22 @@ func TestSameHTTPSOriginNormalizesDefaultPort(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalDesktopShareURLUsesConfiguredPublicOrigin(t *testing.T) {
+	value, err := canonicalDesktopShareURL(
+		"https://deskpatrol.example.com:443/sharing?c=temporary-ticket",
+		"https://deskpatrol.example.com",
+	)
+	if err != nil || value != "https://deskpatrol.example.com/sharing?c=temporary-ticket" {
+		t.Fatalf("桌面分享地址规范化失败: value=%q err=%v", value, err)
+	}
+	for _, raw := range []string{
+		"https://other.example.com/sharing?c=ticket",
+		"https://deskpatrol.example.com:8443/sharing?c=ticket",
+		"https://deskpatrol.example.com/not-sharing?c=ticket",
+	} {
+		if _, err := canonicalDesktopShareURL(raw, "https://deskpatrol.example.com"); err == nil {
+			t.Fatalf("非法桌面分享地址必须被拒绝: %s", raw)
+		}
+	}
+}
