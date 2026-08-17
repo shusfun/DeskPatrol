@@ -115,4 +115,7 @@ func TestDeletedDeviceIdentifiersDoNotBlockActiveBinding(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `UPDATE devices SET node_id='node//deleted',mesh_id='mesh//deleted' WHERE installation_id='active-install'`); err != nil {
 		t.Fatalf("已删除设备的 Mesh 标识不应阻塞在线设备绑定: %v", err)
 	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO devices(id,installation_id,name,architecture,mesh_id) VALUES('30000000-0000-4000-8000-000000000003','active-install-2','active-2','amd64','mesh//deleted')`); err != nil {
+		t.Fatalf("同一 Mesh 设备组应允许多个在线设备: %v", err)
+	}
 }
