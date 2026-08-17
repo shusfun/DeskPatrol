@@ -15,10 +15,13 @@ import (
 )
 
 type LocalState struct {
-	ServerURL   string `json:"serverUrl"`
-	DeviceID    string `json:"deviceId"`
-	DeviceName  string `json:"deviceName"`
-	DeviceToken string `json:"deviceToken"`
+	ServerURL        string `json:"serverUrl"`
+	DeviceID         string `json:"deviceId"`
+	DeviceName       string `json:"deviceName"`
+	DeviceToken      string `json:"deviceToken"`
+	AgentSetupStatus string `json:"agentSetupStatus"`
+	AgentSetupError  string `json:"agentSetupError"`
+	AgentNextRetryAt string `json:"agentNextRetryAt"`
 }
 
 type LocalStore struct{ dir string }

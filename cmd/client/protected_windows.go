@@ -151,35 +151,40 @@ func installMeshAgentElevated(downloadURL, expectedSHA256 string) error {
 }
 
 func meshAgentServiceStatus() string {
+	status, _ := meshAgentServiceState()
+	return status
+}
+
+func meshAgentServiceState() (string, bool) {
 	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
-		return fmt.Sprintf("无法读取服务: %v", err)
+		return fmt.Sprintf("无法读取服务: %v", err), false
 	}
 	defer windows.CloseServiceHandle(manager)
 	name, _ := windows.UTF16PtrFromString("Mesh Agent")
 	service, err := windows.OpenService(manager, name, windows.SERVICE_QUERY_STATUS)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-			return "未安装"
+			return "未安装", false
 		}
-		return fmt.Sprintf("无法打开服务: %v", err)
+		return fmt.Sprintf("无法打开服务: %v", err), false
 	}
 	defer windows.CloseServiceHandle(service)
 	var status windows.SERVICE_STATUS
 	if err := windows.QueryServiceStatus(service, &status); err != nil {
-		return fmt.Sprintf("无法查询服务: %v", err)
+		return fmt.Sprintf("无法查询服务: %v", err), false
 	}
 	switch status.CurrentState {
 	case windows.SERVICE_RUNNING:
-		return "运行中"
+		return "运行中", true
 	case windows.SERVICE_START_PENDING:
-		return "正在启动"
+		return "正在启动", true
 	case windows.SERVICE_STOP_PENDING:
-		return "正在停止"
+		return "正在停止", false
 	case windows.SERVICE_STOPPED:
-		return "已停止"
+		return "已停止", false
 	default:
-		return fmt.Sprintf("状态 %d", status.CurrentState)
+		return fmt.Sprintf("状态 %d", status.CurrentState), false
 	}
 }
 

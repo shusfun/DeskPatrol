@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -52,5 +53,20 @@ func TestDesktopShareURLPatternMatchesPinnedMeshCtrlOutput(t *testing.T) {
 	}
 	if sharingURLPattern.MatchString("https://other.example.com/sharing?c=not-a-meshctrl-result") {
 		t.Fatal("不得接受非 MeshCtrl URL 字段中的地址")
+	}
+}
+
+func TestAgentDownloadIDUsesRawMeshIdentifier(t *testing.T) {
+	raw := strings.Repeat("a", 64)
+	for _, meshID := range []string{"mesh//" + raw, "mesh/domain/" + raw} {
+		value, err := agentDownloadID(meshID)
+		if err != nil || value != raw {
+			t.Fatalf("AgentDownload ID 转换失败: meshID=%q value=%q err=%v", meshID, value, err)
+		}
+	}
+	for _, meshID := range []string{"", "mesh//short", "mesh//" + strings.Repeat("/", 64), "node//" + raw} {
+		if _, err := agentDownloadID(meshID); err == nil {
+			t.Fatalf("错误 MeshID 必须被拒绝: %q", meshID)
+		}
 	}
 }

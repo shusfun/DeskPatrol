@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -41,7 +42,16 @@ type App struct {
 	config     *appconfig.Config
 	pool       *pgxpool.Pool
 	releases   *releasesync.Service
-	mesh       *meshcentral.Controller
+	mesh       meshController
+}
+
+type meshController interface {
+	AddDeviceGroup(context.Context, string, string) (string, error)
+	RemoveDeviceGroup(context.Context, string) error
+	MoveToDeviceGroup(context.Context, string, string) error
+	CreateDesktopShare(context.Context, string, int) (string, error)
+	DownloadAgent(context.Context, string, string, string) (string, int64, error)
+	RunPowerShell(context.Context, string, string, time.Duration) (meshcentral.CommandResult, error)
 }
 
 type principal struct {
@@ -92,6 +102,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/activation-codes", a.auth(http.HandlerFunc(a.listActivationCodes)))
 	mux.Handle("POST /api/v1/activation-codes", a.auth(http.HandlerFunc(a.createActivationCode)))
 	mux.HandleFunc("POST /api/v1/client/activate", a.activateClient)
+	mux.HandleFunc("POST /api/v1/client/agent/prepare", a.prepareEnrollmentAgent)
 	mux.HandleFunc("GET /api/v1/client/agent/{token}", a.downloadEnrollmentAgent)
 	mux.HandleFunc("GET /api/v1/client/status", a.clientStatus)
 	mux.HandleFunc("POST /api/v1/client/runtime-errors", a.ingestClientErrors)
@@ -309,13 +320,13 @@ func (a *App) releaseService() *releasesync.Service {
 	return a.releases
 }
 
-func (a *App) meshController() *meshcentral.Controller {
+func (a *App) meshController() meshController {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.mesh
 }
 
-func (a *App) ensurePermanentMesh(ctx context.Context, pool *pgxpool.Pool, controller *meshcentral.Controller) (string, error) {
+func (a *App) ensurePermanentMesh(ctx context.Context, pool *pgxpool.Pool, controller meshController) (string, error) {
 	var meshID string
 	err := pool.QueryRow(ctx, `SELECT value FROM system_settings WHERE key='meshcentral.permanent_mesh_id'`).Scan(&meshID)
 	if err == nil {
@@ -607,7 +618,7 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("安装 ID 或设备名称不正确"))
 		return
 	}
-	cfg, pool, err := a.snapshot()
+	_, pool, err := a.snapshot()
 	if err != nil {
 		writeError(w, http.StatusPreconditionFailed, err)
 		return
@@ -639,48 +650,27 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("激活码已被其他设备使用"))
 		return
 	}
-	var deviceID, deviceName, meshID, agentPath, agentSHA string
-	var agentSize int64
-	var cleanupEnrollment func()
-	defer func() {
-		if cleanupEnrollment != nil {
-			cleanupEnrollment()
-		}
-	}()
+	var deviceID, deviceName string
 	newEnrollment := usedAt == nil
 	if !newEnrollment {
-		err = tx.QueryRow(r.Context(), `SELECT d.id,d.name,d.mesh_id,e.agent_path,e.agent_sha256,e.size_bytes FROM devices d JOIN enrollment_downloads e ON e.device_id=d.id WHERE d.installation_id=$1`, req.InstallationID).Scan(&deviceID, &deviceName, &meshID, &agentPath, &agentSHA, &agentSize)
+		err = tx.QueryRow(r.Context(), `SELECT id,name FROM devices WHERE installation_id=$1`, req.InstallationID).Scan(&deviceID, &deviceName)
 		if err != nil {
-			writeError(w, http.StatusConflict, errors.New("激活恢复记录不完整，请联系管理员"))
+			writeError(w, http.StatusConflict, errors.New("激活恢复记录不存在，请联系管理员"))
 			return
 		}
 	} else {
-		if err := tx.QueryRow(r.Context(), `SELECT id FROM devices WHERE installation_id=$1`, req.InstallationID).Scan(&deviceID); !errors.Is(err, pgx.ErrNoRows) {
+		existingErr := tx.QueryRow(r.Context(), `SELECT id FROM devices WHERE installation_id=$1`, req.InstallationID).Scan(&deviceID)
+		if existingErr == nil {
 			writeError(w, http.StatusConflict, errors.New("安装 ID 已绑定其他激活记录"))
 			return
 		}
-		controller := a.meshController()
-		meshID, err = controller.AddDeviceGroup(r.Context(), "DeskPatrol Enrollment "+codeID[:8], "一次性激活设备组")
-		if err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Errorf("创建 MeshCentral 临时设备组失败: %w", err))
+		if !errors.Is(existingErr, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, existingErr)
 			return
 		}
-		cleanupEnrollment = func() { _ = controller.RemoveDeviceGroup(context.Background(), meshID) }
 		deviceID, _ = uuid()
 		deviceName = strings.TrimSpace(req.DeviceName)
-		agentPath = filepath.Join(cfg.StorageDir, "enrollments", deviceID, "MeshAgent.exe")
-		downloadContext, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-		agentSHA, agentSize, err = controller.DownloadAgent(downloadContext, meshID, req.Architecture, agentPath)
-		cancel()
-		if err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Errorf("生成 MeshAgent 安装文件失败: %w", err))
-			return
-		}
-		cleanupEnrollment = func() {
-			_ = controller.RemoveDeviceGroup(context.Background(), meshID)
-			_ = os.RemoveAll(filepath.Dir(agentPath))
-		}
-		if _, err := tx.Exec(r.Context(), `INSERT INTO devices(id,installation_id,mesh_id,name,architecture,status) VALUES($1,$2,$3,$4,$5,'pending')`, deviceID, req.InstallationID, meshID, deviceName, req.Architecture); err != nil {
+		if _, err := tx.Exec(r.Context(), `INSERT INTO devices(id,installation_id,name,architecture,status) VALUES($1,$2,$3,$4,'pending')`, deviceID, req.InstallationID, deviceName, req.Architecture); err != nil {
 			writeError(w, http.StatusConflict, fmt.Errorf("创建设备激活记录失败: %w", err))
 			return
 		}
@@ -689,12 +679,6 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	downloadToken, tokenHash, err := newToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	downloadExpires := time.Now().Add(15 * time.Minute)
 	deviceToken, deviceTokenHash, err := newToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -704,19 +688,140 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `INSERT INTO enrollment_downloads(device_id,token_hash,agent_path,agent_sha256,size_bytes,expires_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(device_id) DO UPDATE SET token_hash=EXCLUDED.token_hash,agent_path=EXCLUDED.agent_path,agent_sha256=EXCLUDED.agent_sha256,size_bytes=EXCLUDED.size_bytes,expires_at=EXCLUDED.expires_at,created_at=NOW()`, deviceID, tokenHash, agentPath, agentSHA, agentSize, downloadExpires); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("提交激活事务失败: %w", err))
 		return
 	}
-	cleanupEnrollment = nil
 	writeJSON(w, map[bool]int{true: http.StatusCreated, false: http.StatusOK}[newEnrollment], map[string]any{
-		"deviceId": deviceID, "deviceName": deviceName, "agentDownloadUrl": cfg.PublicURL + "/api/v1/client/agent/" + downloadToken,
-		"agentSha256": agentSHA, "agentSize": agentSize, "expiresAt": downloadExpires, "deviceToken": deviceToken,
+		"deviceId": deviceID, "deviceName": deviceName, "deviceToken": deviceToken,
 	})
+}
+
+func (a *App) prepareEnrollmentAgent(w http.ResponseWriter, r *http.Request) {
+	cfg, pool, err := a.snapshot()
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err)
+		return
+	}
+	deviceID, err := authenticateDevice(r, pool)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, errors.New("设备认证失败"))
+		return
+	}
+	connection, err := pool.Acquire(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer connection.Release()
+	var locked bool
+	if err := connection.QueryRow(r.Context(), `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, deviceID).Scan(&locked); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("获取 Agent 准备锁失败: %w", err))
+		return
+	}
+	if !locked {
+		writeError(w, http.StatusConflict, errors.New("Agent 准备任务正在执行"))
+		return
+	}
+	defer func() {
+		unlockContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, unlockErr := connection.Exec(unlockContext, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, deviceID); unlockErr != nil {
+			a.logger.Error("agent preparation lock release failed", "deviceId", deviceID, "error", security.Redact(unlockErr.Error()))
+			_ = connection.Conn().Close(unlockContext)
+		}
+	}()
+
+	var architecture string
+	var meshID *string
+	if err := connection.QueryRow(r.Context(), `SELECT architecture,mesh_id FROM devices WHERE id=$1`, deviceID).Scan(&architecture, &meshID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	var agentPath, agentSHA string
+	var agentSize int64
+	cacheErr := connection.QueryRow(r.Context(), `SELECT agent_path,agent_sha256,size_bytes FROM enrollment_downloads WHERE device_id=$1`, deviceID).Scan(&agentPath, &agentSHA, &agentSize)
+	if cacheErr == nil {
+		valid, validationErr := validateEnrollmentFile(agentPath, agentSHA, agentSize)
+		if validationErr != nil {
+			a.logger.Warn("cached enrollment validation failed", "deviceId", deviceID, "error", security.Redact(validationErr.Error()))
+		} else if valid {
+			a.respondWithEnrollmentAgent(w, r, connection, cfg, deviceID, agentPath, agentSHA, agentSize)
+			return
+		}
+	} else if !errors.Is(cacheErr, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, cacheErr)
+		return
+	}
+
+	controller := a.meshController()
+	if meshID == nil || strings.TrimSpace(*meshID) == "" {
+		created, createErr := controller.AddDeviceGroup(r.Context(), "DeskPatrol Enrollment "+deviceID[:8], "一次性激活设备组")
+		if createErr != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("创建 MeshCentral 临时设备组失败: %w", createErr))
+			return
+		}
+		if _, updateErr := connection.Exec(r.Context(), `UPDATE devices SET mesh_id=$2 WHERE id=$1`, deviceID, created); updateErr != nil {
+			_ = controller.RemoveDeviceGroup(context.Background(), created)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("保存 MeshCentral 临时设备组失败: %w", updateErr))
+			return
+		}
+		meshID = &created
+	}
+	agentPath = filepath.Join(cfg.StorageDir, "enrollments", deviceID, "MeshAgent.exe")
+	prepareContext, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	agentSHA, agentSize, err = controller.DownloadAgent(prepareContext, *meshID, architecture, agentPath)
+	cancel()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("生成 MeshAgent 安装文件失败: %w", err))
+		return
+	}
+	a.respondWithEnrollmentAgent(w, r, connection, cfg, deviceID, agentPath, agentSHA, agentSize)
+}
+
+func (a *App) respondWithEnrollmentAgent(w http.ResponseWriter, r *http.Request, connection *pgxpool.Conn, cfg *appconfig.Config, deviceID, agentPath, agentSHA string, agentSize int64) {
+	downloadToken, tokenHash, err := newToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if _, err := connection.Exec(r.Context(), `INSERT INTO enrollment_downloads(device_id,token_hash,agent_path,agent_sha256,size_bytes,expires_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(device_id) DO UPDATE SET token_hash=EXCLUDED.token_hash,agent_path=EXCLUDED.agent_path,agent_sha256=EXCLUDED.agent_sha256,size_bytes=EXCLUDED.size_bytes,expires_at=EXCLUDED.expires_at,created_at=NOW()`, deviceID, tokenHash, agentPath, agentSHA, agentSize, expiresAt); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agentDownloadUrl": cfg.PublicURL + "/api/v1/client/agent/" + downloadToken,
+		"agentSha256":      agentSHA,
+		"agentSize":        agentSize,
+		"expiresAt":        expiresAt,
+	})
+}
+
+func validateEnrollmentFile(path, expectedSHA string, expectedSize int64) (bool, error) {
+	if len(expectedSHA) != 64 || expectedSize < 1024 || expectedSize > 256<<20 {
+		return false, nil
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() != expectedSize {
+		return false, nil
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return false, err
+	}
+	return strings.EqualFold(hex.EncodeToString(hasher.Sum(nil)), expectedSHA), nil
 }
 
 func (a *App) downloadEnrollmentAgent(w http.ResponseWriter, r *http.Request) {

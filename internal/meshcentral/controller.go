@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"deskpatrol/internal/appconfig"
+	"deskpatrol/internal/security"
 )
 
 const (
@@ -29,6 +30,7 @@ const (
 )
 
 var meshIDPattern = regexp.MustCompile(`mesh/[A-Za-z0-9_+/@=-]+`)
+var agentDownloadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_+@=-]{64}$`)
 var sharingURLPattern = regexp.MustCompile(`(?m)^URL:\s+(https://[^\s]+/sharing\?[^\s]+)\s*$`)
 
 type Controller struct {
@@ -104,8 +106,9 @@ func (c *Controller) CreateDesktopShare(ctx context.Context, nodeID string, dura
 }
 
 func (c *Controller) DownloadAgent(ctx context.Context, meshID, architecture, destination string) (string, int64, error) {
-	if !validMeshID(meshID) {
-		return "", 0, errors.New("MeshCentral MeshID 不正确")
+	agentID, err := agentDownloadID(meshID)
+	if err != nil {
+		return "", 0, err
 	}
 	agentType := "4"
 	if architecture == "arm64" {
@@ -118,7 +121,8 @@ func (c *Controller) DownloadAgent(ctx context.Context, meshID, architecture, de
 		return "", 0, fmt.Errorf("创建 Agent 下载目录失败: %w", err)
 	}
 	defer os.RemoveAll(temporaryDir)
-	if _, err := c.runMeshCtrlIn(ctx, temporaryDir, "AgentDownload", "--id", meshID, "--type", agentType, "--installflags", "1"); err != nil {
+	output, err := c.runMeshCtrlIn(ctx, temporaryDir, "AgentDownload", "--id", agentID, "--type", agentType, "--installflags", "1")
+	if err != nil {
 		return "", 0, err
 	}
 	entries, err := os.ReadDir(temporaryDir)
@@ -135,7 +139,7 @@ func (c *Controller) DownloadAgent(ctx context.Context, meshID, architecture, de
 		}
 	}
 	if source == "" {
-		return "", 0, errors.New("MeshCentral AgentDownload 未生成安装文件")
+		return "", 0, fmt.Errorf("MeshCentral AgentDownload 未生成安装文件: %s", concise(security.Redact(output)))
 	}
 	raw, err := os.ReadFile(source)
 	if err != nil {
@@ -237,6 +241,9 @@ func (c *Controller) runMeshCtrlIn(ctx context.Context, directory string, args .
 	if err := command.Run(); err != nil {
 		return "", fmt.Errorf("MeshCentral 命令失败: %w; stdout=%s; stderr=%s", err, concise(stdout.String()), concise(stderr.String()))
 	}
+	if stderr.Len() > 0 {
+		return stdout.String() + "\n" + stderr.String(), nil
+	}
 	return stdout.String(), nil
 }
 
@@ -256,6 +263,17 @@ func (b *limitedBuffer) Write(value []byte) (int, error) {
 
 func validMeshID(value string) bool { return strings.HasPrefix(value, "mesh/") && len(value) <= 512 }
 func validNodeID(value string) bool { return strings.HasPrefix(value, "node/") && len(value) <= 512 }
+func agentDownloadID(meshID string) (string, error) {
+	if !validMeshID(meshID) {
+		return "", errors.New("MeshCentral MeshID 不正确")
+	}
+	parts := strings.Split(meshID, "/")
+	value := parts[len(parts)-1]
+	if !agentDownloadIDPattern.MatchString(value) {
+		return "", errors.New("MeshCentral AgentDownload ID 不正确")
+	}
+	return value, nil
+}
 func concise(value string) string {
 	value = strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
 	if len(value) > 500 {
