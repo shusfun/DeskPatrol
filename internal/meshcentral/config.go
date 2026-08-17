@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+
+	"deskpatrol/internal/appconfig"
 )
 
 type ConfigInput struct {
@@ -59,12 +61,28 @@ func WriteConfig(path string, input ConfigInput) error {
 		"domains": map[string]any{
 			"": map[string]any{
 				"title": "DeskPatrol Mesh", "newAccounts": false,
+				"certUrl":               "https://127.0.0.1:18130",
 				"desktop":               map[string]any{"viewonly": true, "disableconnectall": true},
 				"localSessionRecording": false, "sessionRecording": false,
 			},
 		},
 	}
 	return writeJSONAtomic(path, value)
+}
+
+func WriteDeploymentFiles(configDirectory string, cfg appconfig.Config) error {
+	meshConfigPath := filepath.Join(configDirectory, "meshcentral-config.json")
+	if err := WriteConfig(meshConfigPath, ConfigInput{
+		PublicURL: cfg.PublicURL, AgentPublicPort: cfg.AgentPublicPort, StorageDir: cfg.StorageDir,
+		DatabaseHost: cfg.Database.Host, DatabasePort: cfg.Database.Port, DatabaseUser: cfg.Database.User,
+		DatabasePass: cfg.Database.Password, DatabaseName: cfg.Database.Name, LoginKey: cfg.MeshLoginKey,
+	}); err != nil {
+		return fmt.Errorf("写入 MeshCentral 配置失败: %w", err)
+	}
+	if err := WriteEnvironment(filepath.Join(configDirectory, "meshcentral.env"), cfg.PluginToken); err != nil {
+		return fmt.Errorf("写入 MeshCentral 插件环境失败: %w", err)
+	}
+	return nil
 }
 
 func WriteEnvironment(path, token string) error {

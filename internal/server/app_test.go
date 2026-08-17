@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,5 +107,35 @@ func TestValidateEnrollmentFileChecksSizeAndDigest(t *testing.T) {
 	}
 	if valid, err := validateEnrollmentFile(path, hex.EncodeToString(digest[:]), int64(len(raw)+1)); err != nil || valid {
 		t.Fatalf("错误大小必须被拒绝: valid=%v err=%v", valid, err)
+	}
+}
+
+func TestSameHTTPSOriginNormalizesDefaultPort(t *testing.T) {
+	parse := func(raw string) *url.URL {
+		value, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	publicURL := parse("https://deskpatrol.example.com")
+	for _, raw := range []string{
+		"https://deskpatrol.example.com/sharing",
+		"https://deskpatrol.example.com:443/sharing",
+		"https://DESKPATROL.EXAMPLE.COM:443/sharing",
+	} {
+		if !sameHTTPSOrigin(parse(raw), publicURL) {
+			t.Fatalf("默认 HTTPS 端口应视为同源: %s", raw)
+		}
+	}
+	for _, raw := range []string{
+		"http://deskpatrol.example.com/sharing",
+		"https://deskpatrol.example.com:8443/sharing",
+		"https://other.example.com/sharing",
+		"https://user@deskpatrol.example.com/sharing",
+	} {
+		if sameHTTPSOrigin(parse(raw), publicURL) {
+			t.Fatalf("非本站 HTTPS Origin 必须被拒绝: %s", raw)
+		}
 	}
 }

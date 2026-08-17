@@ -577,11 +577,28 @@ func (a *App) createDesktopTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	publicOrigin, _ := url.Parse(cfg.PublicURL)
 	parsed, err := url.Parse(shareURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != publicOrigin.Host || parsed.Path != "/sharing" {
+	if err != nil || !sameHTTPSOrigin(parsed, publicOrigin) || parsed.Path != "/sharing" {
 		writeError(w, http.StatusBadGateway, errors.New("MeshCentral 返回了非本站桌面分享地址"))
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"url": shareURL, "expiresAt": time.Now().Add(5 * time.Minute), "viewOnly": true})
+}
+
+func sameHTTPSOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil || left.User != nil || right.User != nil || left.Scheme != "https" || right.Scheme != "https" {
+		return false
+	}
+	leftHost, rightHost := strings.ToLower(left.Hostname()), strings.ToLower(right.Hostname())
+	if leftHost == "" || leftHost != rightHost {
+		return false
+	}
+	effectivePort := func(value *url.URL) string {
+		if value.Port() != "" {
+			return value.Port()
+		}
+		return "443"
+	}
+	return effectivePort(left) == effectivePort(right)
 }
 
 func (a *App) getWallLayout(w http.ResponseWriter, r *http.Request) {

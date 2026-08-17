@@ -164,14 +164,9 @@ func Install(ctx context.Context, configPath string, req Request) (Result, error
 	configDirectory := filepath.Dir(configPath)
 	meshConfigPath := filepath.Join(configDirectory, "meshcentral-config.json")
 	meshEnvironmentPath := filepath.Join(configDirectory, "meshcentral.env")
-	if err := meshcentral.WriteConfig(meshConfigPath, meshcentral.ConfigInput{PublicURL: cfg.PublicURL, AgentPublicPort: cfg.AgentPublicPort, StorageDir: cfg.StorageDir, DatabaseHost: cfg.Database.Host, DatabasePort: cfg.Database.Port, DatabaseUser: cfg.Database.User, DatabasePass: cfg.Database.Password, DatabaseName: cfg.Database.Name, LoginKey: cfg.MeshLoginKey}); err != nil {
+	if err := meshcentral.WriteDeploymentFiles(configDirectory, cfg); err != nil {
 		_ = os.Remove(configPath)
-		return Result{}, fmt.Errorf("写入 MeshCentral 配置失败: %w", err)
-	}
-	if err := meshcentral.WriteEnvironment(meshEnvironmentPath, cfg.PluginToken); err != nil {
-		_ = os.Remove(configPath)
-		_ = os.Remove(meshConfigPath)
-		return Result{}, fmt.Errorf("写入 MeshCentral 插件环境失败: %w", err)
+		return Result{}, err
 	}
 	cleanupFiles := true
 	defer func() {
