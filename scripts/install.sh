@@ -58,7 +58,6 @@ release_dir="$install_root/releases/$version"
 install -d -m 0755 "$release_dir" /var/lib/deskpatrol /var/log/deskpatrol
 install -d -m 0750 /etc/deskpatrol
 tar -xzf "$temporary_dir/$archive" -C "$release_dir" --strip-components=1
-ln -sfn "$release_dir" "$install_root/current"
 
 if ! id deskpatrol >/dev/null 2>&1; then
   useradd --system --home /var/lib/deskpatrol --shell /usr/sbin/nologin deskpatrol
@@ -75,6 +74,16 @@ install -m 0644 "$release_dir/deploy/systemd/deskpatrol-meshcentral.service" /et
 install -m 0644 "$release_dir/deploy/systemd/deskpatrol-meshcentral.path" /etc/systemd/system/deskpatrol-meshcentral.path
 install -m 0644 "$release_dir/deploy/nginx/deskpatrol.conf.example" /etc/deskpatrol/nginx.conf.example
 systemctl daemon-reload
-systemctl enable --now deskpatrol.service deskpatrol-meshcentral.path
+systemctl enable deskpatrol.service deskpatrol-meshcentral.path
+
+if [[ -f /etc/deskpatrol/config.json ]]; then
+  runuser -u deskpatrol -- "$release_dir/bin/deskpatrol-server" migrate --config /etc/deskpatrol/config.json
+  ln -sfn "$release_dir" "$install_root/current"
+  systemctl restart deskpatrol.service deskpatrol-meshcentral.service
+  systemctl start deskpatrol-meshcentral.path
+else
+  ln -sfn "$release_dir" "$install_root/current"
+  systemctl start deskpatrol.service deskpatrol-meshcentral.path
+fi
 
 echo "DeskPatrol $version 已安装。请通过 Nginx 暴露服务后访问 Setup 页面。"
