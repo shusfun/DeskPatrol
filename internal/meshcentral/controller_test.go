@@ -34,6 +34,9 @@ func TestRunPowerShellUsesLoopbackTokenAndParsesResult(t *testing.T) {
 
 func TestMeshIdentifiersAreStrict(t *testing.T) {
 	controller := NewController("", "", t.TempDir())
+	if controller.ControlURL != "ws://127.0.0.1:18129" || controller.AgentControlURL != "wss://127.0.0.1:18130" {
+		t.Fatalf("MeshCentral 控制地址不正确: %#v", controller)
+	}
 	if _, err := controller.AddDeviceGroup(context.Background(), "", ""); err == nil {
 		t.Fatal("空设备组名称必须被拒绝")
 	}
@@ -75,6 +78,26 @@ func TestAgentDownloadIDUsesRawMeshIdentifier(t *testing.T) {
 	for _, meshID := range []string{"", "mesh//short", "mesh//" + strings.Repeat("/", 64), "mesh//" + strings.Repeat(".", 64), "node//" + raw} {
 		if _, err := agentDownloadID(meshID); err == nil {
 			t.Fatalf("错误 MeshID 必须被拒绝: %q", meshID)
+		}
+	}
+}
+
+func TestAgentDownloadOutputMatchesPinnedMeshCtrlExitOneSuccess(t *testing.T) {
+	if err := validateAgentDownloadOutput(`Downloaded 3489752 byte(s) to "meshagent64-DeskPatrol.exe"`, "meshagent64-DeskPatrol.exe", 3489752); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		output   string
+		filename string
+		size     int64
+	}{
+		{output: "Unable to connect", filename: "meshagent.exe", size: 1},
+		{output: "Unable to connect\n" + `Downloaded 20 byte(s) to "meshagent.exe"`, filename: "meshagent.exe", size: 20},
+		{output: `Downloaded 20 byte(s) to "other.exe"`, filename: "meshagent.exe", size: 20},
+		{output: `Downloaded 20 byte(s) to "meshagent.exe"`, filename: "meshagent.exe", size: 19},
+	} {
+		if err := validateAgentDownloadOutput(test.output, test.filename, test.size); err == nil {
+			t.Fatalf("错误 AgentDownload 输出必须被拒绝: %#v", test)
 		}
 	}
 }
