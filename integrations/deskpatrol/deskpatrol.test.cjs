@@ -35,9 +35,19 @@ test("插件令牌使用常量时间比较", () => {
 test("Linux 安装脚本在启动 MeshCentral 前创建全部可写目录", () => {
   const installer = fs.readFileSync(path.resolve(__dirname, "../../scripts/install.sh"), "utf8");
   const directorySetup = installer.indexOf("/var/lib/deskpatrol/meshcentral-files");
-  const serviceStart = installer.indexOf("systemctl enable --now");
+  const serviceStart = installer.indexOf("systemctl start deskpatrol.service deskpatrol-meshcentral.path");
   assert.notEqual(directorySetup, -1);
   assert.ok(directorySetup < serviceStart);
+});
+
+test("Linux 升级先迁移再切换版本并重启服务", () => {
+  const installer = fs.readFileSync(path.resolve(__dirname, "../../scripts/install.sh"), "utf8");
+  const migration = installer.indexOf('"$release_dir/bin/deskpatrol-server" migrate');
+  const switchVersion = installer.indexOf('ln -sfn "$release_dir" "$install_root/current"', migration);
+  const restartServices = installer.indexOf("systemctl restart deskpatrol.service deskpatrol-meshcentral.service");
+  assert.notEqual(migration, -1);
+  assert.ok(migration < switchVersion);
+  assert.ok(switchVersion < restartServices);
 });
 
 test("MeshCentral systemd 服务在启动前引导内部管理员", () => {
