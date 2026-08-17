@@ -50,6 +50,13 @@ test("MeshCentral systemd 服务在启动前引导内部管理员", () => {
   assert.match(bootstrap, /--pass "\$password"/);
 });
 
+test("MeshCentral AgentDownload 通过仅回环可见的 TLS 入口", () => {
+  const nginx = fs.readFileSync(path.resolve(__dirname, "../../deploy/nginx/deskpatrol.conf.example"), "utf8");
+  assert.match(nginx, /listen 127\.0\.0\.1:18130 ssl;/);
+  assert.match(nginx, /location = \/control\.ashx[\s\S]*proxy_pass http:\/\/127\.0\.0\.1:18129;/);
+  assert.match(nginx, /location = \/meshagents[\s\S]*proxy_pass http:\/\/127\.0\.0\.1:18129;/);
+});
+
 test("Linux Release 在 MeshCentral 父级预装动态运行依赖", () => {
   const buildScript = fs.readFileSync(path.resolve(__dirname, "../../scripts/build-linux-release.sh"), "utf8");
   assert.match(buildScript, /--prefix "\$stage\/meshcentral" install/);

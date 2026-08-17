@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,26 +23,29 @@ import (
 )
 
 const (
-	defaultNodePath     = "/opt/deskpatrol/current/node/bin/node"
-	defaultMeshCtrlPath = "/opt/deskpatrol/current/meshcentral/node_modules/meshcentral/meshctrl.js"
-	defaultControlURL   = "ws://127.0.0.1:18129"
-	defaultCommandURL   = "http://127.0.0.1:18129/deskpatrol/run-command"
-	maxCommandResponse  = 600 << 10
+	defaultNodePath        = "/opt/deskpatrol/current/node/bin/node"
+	defaultMeshCtrlPath    = "/opt/deskpatrol/current/meshcentral/node_modules/meshcentral/meshctrl.js"
+	defaultControlURL      = "ws://127.0.0.1:18129"
+	defaultAgentControlURL = "wss://127.0.0.1:18130"
+	defaultCommandURL      = "http://127.0.0.1:18129/deskpatrol/run-command"
+	maxCommandResponse     = 600 << 10
 )
 
 var meshIDPattern = regexp.MustCompile(`mesh/[A-Za-z0-9_+/$@=-]+`)
 var agentDownloadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_+$@=-]{64}$`)
+var agentDownloadSuccessPattern = regexp.MustCompile(`^Downloaded ([0-9]+) byte\(s\) to "([^"]+)"\s*$`)
 var sharingURLPattern = regexp.MustCompile(`(?m)^URL:\s+(https://[^\s]+/sharing\?[^\s]+)\s*$`)
 
 type Controller struct {
-	NodePath     string
-	MeshCtrlPath string
-	ControlURL   string
-	CommandURL   string
-	LoginKey     string
-	PluginToken  string
-	StorageDir   string
-	HTTPClient   *http.Client
+	NodePath        string
+	MeshCtrlPath    string
+	ControlURL      string
+	AgentControlURL string
+	CommandURL      string
+	LoginKey        string
+	PluginToken     string
+	StorageDir      string
+	HTTPClient      *http.Client
 }
 
 type CommandResult struct {
@@ -54,7 +58,7 @@ type CommandResult struct {
 func NewController(loginKey, pluginToken, storageDir string) *Controller {
 	return &Controller{
 		NodePath: defaultNodePath, MeshCtrlPath: defaultMeshCtrlPath, ControlURL: defaultControlURL,
-		CommandURL: defaultCommandURL, LoginKey: loginKey, PluginToken: pluginToken, StorageDir: storageDir,
+		AgentControlURL: defaultAgentControlURL, CommandURL: defaultCommandURL, LoginKey: loginKey, PluginToken: pluginToken, StorageDir: storageDir,
 		HTTPClient: &http.Client{Timeout: 130 * time.Second},
 	}
 }
@@ -121,10 +125,7 @@ func (c *Controller) DownloadAgent(ctx context.Context, meshID, architecture, de
 		return "", 0, fmt.Errorf("创建 Agent 下载目录失败: %w", err)
 	}
 	defer os.RemoveAll(temporaryDir)
-	output, err := c.runMeshCtrlIn(ctx, temporaryDir, "AgentDownload", "--id", agentID, "--type", agentType, "--installflags", "1")
-	if err != nil {
-		return "", 0, err
-	}
+	output, commandErr := c.runMeshCtrlInWithURL(ctx, temporaryDir, c.AgentControlURL, "AgentDownload", "--id", agentID, "--type", agentType, "--installflags", "1")
 	entries, err := os.ReadDir(temporaryDir)
 	if err != nil {
 		return "", 0, err
@@ -139,6 +140,9 @@ func (c *Controller) DownloadAgent(ctx context.Context, meshID, architecture, de
 		}
 	}
 	if source == "" {
+		if commandErr != nil {
+			return "", 0, commandErr
+		}
 		return "", 0, fmt.Errorf("MeshCentral AgentDownload 未生成安装文件: %s", concise(security.Redact(output)))
 	}
 	raw, err := os.ReadFile(source)
@@ -147,6 +151,15 @@ func (c *Controller) DownloadAgent(ctx context.Context, meshID, architecture, de
 	}
 	if len(raw) < 1024 || len(raw) > 256<<20 {
 		return "", 0, errors.New("MeshCentral Agent 文件大小不正确")
+	}
+	if err := validateAgentDownloadOutput(output, filepath.Base(source), int64(len(raw))); err != nil {
+		return "", 0, fmt.Errorf("%w: %s", err, concise(security.Redact(output)))
+	}
+	if commandErr != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(commandErr, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", 0, commandErr
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return "", 0, err
@@ -201,8 +214,15 @@ func (c *Controller) runMeshCtrl(ctx context.Context, args ...string) (string, e
 }
 
 func (c *Controller) runMeshCtrlIn(ctx context.Context, directory string, args ...string) (string, error) {
+	return c.runMeshCtrlInWithURL(ctx, directory, c.ControlURL, args...)
+}
+
+func (c *Controller) runMeshCtrlInWithURL(ctx context.Context, directory, controlURL string, args ...string) (string, error) {
 	if len(c.LoginKey) != appconfig.MeshLoginKeySize {
 		return "", errors.New("MeshCentral 登录密钥不正确")
+	}
+	if !strings.HasPrefix(controlURL, "ws://") && !strings.HasPrefix(controlURL, "wss://") {
+		return "", errors.New("MeshCentral 控制地址不正确")
 	}
 	if _, err := os.Stat(c.NodePath); err != nil {
 		return "", fmt.Errorf("MeshCentral Node runtime 不可用: %w", err)
@@ -232,14 +252,15 @@ func (c *Controller) runMeshCtrlIn(ctx context.Context, directory string, args .
 	}
 	commandArgs := []string{c.MeshCtrlPath}
 	commandArgs = append(commandArgs, args...)
-	commandArgs = append(commandArgs, "--url", c.ControlURL, "--loginuser", "admin", "--loginkeyfile", keyPath)
+	commandArgs = append(commandArgs, "--url", controlURL, "--loginuser", "admin", "--loginkeyfile", keyPath)
 	command := exec.CommandContext(ctx, c.NodePath, commandArgs...)
 	command.Dir = directory
 	var stdout, stderr limitedBuffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		return "", fmt.Errorf("MeshCentral 命令失败: %w; stdout=%s; stderr=%s", err, concise(stdout.String()), concise(stderr.String()))
+		output := stdout.String() + "\n" + stderr.String()
+		return output, fmt.Errorf("MeshCentral 命令失败: %w; stdout=%s; stderr=%s", err, concise(security.Redact(stdout.String())), concise(security.Redact(stderr.String())))
 	}
 	if stderr.Len() > 0 {
 		return stdout.String() + "\n" + stderr.String(), nil
@@ -273,6 +294,18 @@ func agentDownloadID(meshID string) (string, error) {
 		return "", errors.New("MeshCentral AgentDownload ID 不正确")
 	}
 	return value, nil
+}
+
+func validateAgentDownloadOutput(output, filename string, size int64) error {
+	match := agentDownloadSuccessPattern.FindStringSubmatch(strings.TrimSpace(output))
+	if len(match) != 3 || filepath.Base(match[2]) != filename {
+		return errors.New("MeshCentral AgentDownload 响应缺少成功结果")
+	}
+	written, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil || written != size {
+		return errors.New("MeshCentral AgentDownload 响应大小不匹配")
+	}
+	return nil
 }
 func concise(value string) string {
 	value = strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))

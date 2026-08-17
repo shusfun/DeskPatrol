@@ -46,6 +46,32 @@ server {
     }
 }
 
+# meshctrl AgentDownload 固定使用 HTTPS 拉取 /meshagents，因此通过仅回环可见的 TLS 入口访问。
+server {
+    listen 127.0.0.1:18130 ssl;
+    server_name localhost;
+
+    ssl_certificate /etc/letsencrypt/live/deskpatrol.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/deskpatrol.example.com/privkey.pem;
+
+    location = /control.ashx {
+        proxy_pass http://127.0.0.1:18129;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $deskpatrol_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+
+    location = /meshagents {
+        proxy_pass http://127.0.0.1:18129;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+}
+
 server {
     listen 8443 ssl;
     server_name deskpatrol.example.com;
