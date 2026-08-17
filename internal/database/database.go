@@ -86,8 +86,8 @@ DELETE FROM activation_codes WHERE used_at IS NULL AND code_ciphertext IS NULL A
 CREATE TABLE IF NOT EXISTS devices (
   id UUID PRIMARY KEY,
   installation_id TEXT NOT NULL UNIQUE,
-  node_id TEXT UNIQUE,
-	mesh_id TEXT UNIQUE,
+	node_id TEXT,
+	mesh_id TEXT,
 	client_token_hash TEXT UNIQUE,
   name TEXT NOT NULL,
   architecture TEXT NOT NULL,
@@ -124,7 +124,17 @@ BEGIN
     ALTER TABLE devices ADD CONSTRAINT devices_selected_display_id_check CHECK (selected_display_id IS NULL OR selected_display_id BETWEEN 0 AND 65534);
   END IF;
 END $$;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_mesh_id ON devices(mesh_id) WHERE mesh_id IS NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM deployment_migrations WHERE name = '2026-08-17-active-device-identifiers') THEN
+    ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_node_id_key;
+    ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_mesh_id_key;
+    DROP INDEX IF EXISTS idx_devices_mesh_id;
+    INSERT INTO deployment_migrations(name) VALUES('2026-08-17-active-device-identifiers');
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_node_id_active ON devices(node_id) WHERE node_id IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_mesh_id_active ON devices(mesh_id) WHERE mesh_id IS NOT NULL AND deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_client_token ON devices(client_token_hash) WHERE client_token_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS wall_layouts (
   administrator_id BIGINT PRIMARY KEY REFERENCES administrators(id) ON DELETE CASCADE,

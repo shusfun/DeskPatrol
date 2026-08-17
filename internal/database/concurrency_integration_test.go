@@ -103,3 +103,16 @@ func TestNodeIDUniqueBindingRejectsSecondDevice(t *testing.T) {
 		t.Fatalf("第二台设备绑定同一 NodeID 必须触发唯一约束，得到 %v", err)
 	}
 }
+
+func TestDeletedDeviceIdentifiersDoNotBlockActiveBinding(t *testing.T) {
+	pool := testPool(t)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO devices(id,installation_id,node_id,mesh_id,name,architecture,status,deleted_at) VALUES('30000000-0000-4000-8000-000000000001','deleted-install','node//deleted','mesh//deleted','deleted','amd64','deleted',NOW())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO devices(id,installation_id,name,architecture) VALUES('30000000-0000-4000-8000-000000000002','active-install','active','amd64')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE devices SET node_id='node//deleted',mesh_id='mesh//deleted' WHERE installation_id='active-install'`); err != nil {
+		t.Fatalf("已删除设备的 Mesh 标识不应阻塞在线设备绑定: %v", err)
+	}
+}
