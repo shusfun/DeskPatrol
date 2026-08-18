@@ -5,7 +5,7 @@ import { formatBytes, formatDate } from "@deskpatrol/core";
 import { Activity, AppWindow, ChevronLeft, Clipboard, Copy, Download, Expand, Grid2X2, KeyRound, LayoutDashboard, List, LoaderCircle, LockKeyhole, LogOut, Monitor, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, Terminal, Trash2 } from "@deskpatrol/icons";
 import type { ActivationCode, ActivationCodeCreated, ActivationCodeStatus, Administrator, DebugSession, Device, DownloadArtifact, ReleaseJob, SetupRequest, SetupResult, SetupStatus, WallLayout } from "@deskpatrol/types";
 import { Button, Dialog, EmptyState, Field, IconButton, SelectField, StatusBadge, ThemeControl } from "@deskpatrol/ui-admin";
-import { displayRequestDue, frameIntervalByMode, FrameActivityCounter, physicalDisplayIds, resolveDisplaySelection, targetFps, type DesktopViewerMode } from "./desktop-viewer";
+import { displayRequestDue, frameIntervalByMode, FrameActivityCounter, physicalDisplayIds, resolveDisplaySelection, targetFps, ticketRenewalDelayMs, type DesktopViewerMode } from "./desktop-viewer";
 import { createToolbarAutoHideController, isImmersionExitKey, moveDeviceOrder } from "./wall-immersion";
 
 type Page = "wall" | "devices" | "codes" | "downloads" | "diagnostics" | "audit" | "settings";
@@ -146,7 +146,7 @@ function WallPage() {
   const exitImmersive = useCallback(() => setImmersive(false), []); const toolbar = useImmersiveToolbar(immersive, exitImmersive);
   useEffect(() => { request<WallLayout>("/api/v1/wall-layout").then(setLayout).catch((next) => setLayoutError(message(next))).finally(() => setLayoutBusy(false)); }, []);
   const ordered = useMemo(() => [...devices].sort((a, b) => { const ai = layout.deviceOrder.indexOf(a.id); const bi = layout.deviceOrder.indexOf(b.id); return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi); }), [devices, layout.deviceOrder]);
-  const selectedDevice = ordered.find((device) => device.id === selected); const activeDevices = selectedDevice ? [selectedDevice] : ordered.slice(0, layout.tileCount); const activeTicketKey = activeDevices.map((device) => `${device.id}:${device.status}`).join("|");
+  const selectedDevice = ordered.find((device) => device.id === selected); const activeDevices = selectedDevice ? [selectedDevice] : ordered.slice(0, layout.tileCount); const activeTicketKey = activeDevices.map((device) => `${device.id}:${device.status}`).join("|"); const activeDeviceIDs = activeDevices.map((device) => device.id).join("|");
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -171,6 +171,19 @@ function WallPage() {
     catch (next) { setTicketErrors((current) => ({ ...current, [deviceID]: message(next) })); }
     finally { renewingTickets.current.delete(deviceID); }
   }, []);
+  useEffect(() => {
+    const timers = activeDevices.flatMap((device) => {
+      const ticket = tickets[device.id];
+      if (!ticket) return [];
+      const delay = ticketRenewalDelayMs(ticket.expiresAt);
+      if (delay === null) {
+        setTicketErrors((current) => ({ ...current, [device.id]: "桌面票据到期时间无效" }));
+        return [];
+      }
+      return [[device.id, window.setTimeout(() => void renewTicket(device.id), delay)] as const];
+    });
+    return () => { timers.forEach(([, timer]) => window.clearTimeout(timer)); };
+  }, [activeDeviceIDs, renewTicket, tickets]);
   const saveDisplaySelection = useCallback(async (deviceID: string, displayID: number, _removed = false) => {
     try { await request(`/api/v1/devices/${deviceID}/display-selection`, { method: "PUT", body: json({ displayId: displayID }) }); updateDisplaySelection(deviceID, displayID); setTicketErrors((current) => ({ ...current, [deviceID]: "" })); }
     catch (next) { setTicketErrors((current) => ({ ...current, [deviceID]: message(next) })); throw next; }
