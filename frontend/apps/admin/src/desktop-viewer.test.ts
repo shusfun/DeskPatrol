@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayRefreshIntervalMs, displayRequestDue, displayRequestIntervalMs, frameIntervalByMode, FrameActivityCounter, physicalDisplayIds, resolveDisplaySelection, RollingFpsCounter, targetFps } from "./desktop-viewer";
+import { displayRefreshIntervalMs, displayRequestDue, displayRequestIntervalMs, frameIntervalByMode, FrameActivityCounter, physicalDisplayIds, resolveDisplaySelection, RollingFpsCounter, targetFps, ticketRenewalDelayMs, ticketRenewalLeadMs } from "./desktop-viewer";
 
 describe("桌面查看器模式", () => {
   it("固定使用 2.5、10 和 20 FPS", () => {
@@ -48,5 +48,21 @@ describe("显示器查询", () => {
     expect(displayRequestDue(1_000, 0, false)).toBe(true);
     expect(displayRequestDue(4_999, 0, true)).toBe(false);
     expect(displayRequestDue(5_000, 0, true)).toBe(true);
+  });
+});
+
+describe("桌面票据续签", () => {
+  it("在票据到期前提前续签", () => {
+    const now = Date.parse("2026-08-18T10:00:00.000Z");
+    expect(ticketRenewalDelayMs("2026-08-18T10:05:00.000Z", now)).toBe(300_000 - ticketRenewalLeadMs);
+  });
+
+  it("已到期票据仍只安排一次最短延迟", () => {
+    const now = Date.parse("2026-08-18T10:05:00.000Z");
+    expect(ticketRenewalDelayMs("2026-08-18T10:04:00.000Z", now)).toBe(1_000);
+  });
+
+  it("拒绝无效的到期时间", () => {
+    expect(ticketRenewalDelayMs("invalid-date")).toBeNull();
   });
 });

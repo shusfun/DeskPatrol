@@ -8,6 +8,13 @@ export const frameIntervalByMode: Record<DesktopViewerMode, number> = {
 
 export const displayRequestIntervalMs = 1_000;
 export const displayRefreshIntervalMs = 5_000;
+export const ticketRenewalLeadMs = 15_000;
+
+export function ticketRenewalDelayMs(expiresAt: string, now = Date.now()) {
+  const expiry = Date.parse(expiresAt);
+  if (!Number.isFinite(expiry)) return null;
+  return Math.max(1_000, expiry - now - ticketRenewalLeadMs);
+}
 
 export function displayRequestDue(now: number, lastRequest: number, hasPhysicalDisplays: boolean) {
   const interval = hasPhysicalDisplays ? displayRefreshIntervalMs : displayRequestIntervalMs;
