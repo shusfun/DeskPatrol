@@ -49,6 +49,9 @@ func TestDefaultsUseNonTLSLoopbackPostgreSQL(t *testing.T) {
 	if defaults.Database.Host != "127.0.0.1" || defaults.Database.SSLMode != "disable" {
 		t.Fatalf("本机 PostgreSQL 默认值不正确: %#v", defaults.Database)
 	}
+	if defaults.GitHubRepository != "shusfun/DeskPatrol" {
+		t.Fatalf("GitHub 默认仓库不正确: %s", defaults.GitHubRepository)
+	}
 }
 
 func TestDefaultStorageDirUsesLinuxPersistentDirectory(t *testing.T) {

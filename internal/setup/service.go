@@ -52,7 +52,7 @@ func Defaults(configPath string) (Request, error) {
 		PublicURL:        "https://deskpatrol.example.com",
 		AgentPublicPort:  8443,
 		StorageDir:       storageDir,
-		GitHubRepository: "owner/deskpatrol",
+		GitHubRepository: "shusfun/DeskPatrol",
 		Database:         appconfig.Database{Host: "127.0.0.1", Port: 5432, User: "deskpatrol", Name: "deskpatrol", SSLMode: "disable"},
 		Admin:            Admin{LoginName: "admin"},
 	}, nil
