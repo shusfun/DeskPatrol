@@ -100,6 +100,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/auth/me", a.auth(http.HandlerFunc(a.me)))
 	mux.Handle("GET /api/v1/devices", a.auth(http.HandlerFunc(a.listDevices)))
 	mux.Handle("DELETE /api/v1/devices/{id}", a.auth(http.HandlerFunc(a.deleteDevice)))
+	mux.Handle("PUT /api/v1/devices/{id}/label", a.auth(http.HandlerFunc(a.putDeviceLabel)))
 	mux.Handle("GET /api/v1/devices/{id}/display-selection", a.auth(http.HandlerFunc(a.getDisplaySelection)))
 	mux.Handle("PUT /api/v1/devices/{id}/display-selection", a.auth(http.HandlerFunc(a.putDisplaySelection)))
 	mux.Handle("POST /api/v1/devices/{id}/desktop-ticket", a.auth(http.HandlerFunc(a.createDesktopTicket)))
@@ -477,7 +478,7 @@ func (a *App) debugAuth(next http.Handler) http.Handler {
 
 func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,name,architecture,status,screen_count,selected_display_id,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
+	rows, err := pool.Query(r.Context(), `SELECT id,name,label,architecture,status,screen_count,selected_display_id,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -485,21 +486,50 @@ func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, architecture, status string
+		var id, name, label, architecture, status string
 		var screens int
 		var selectedDisplayID *int
 		var lastSeen *time.Time
 		var created time.Time
-		if err := rows.Scan(&id, &name, &architecture, &status, &screens, &selectedDisplayID, &lastSeen, &created); err != nil {
+		if err := rows.Scan(&id, &name, &label, &architecture, &status, &screens, &selectedDisplayID, &lastSeen, &created); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if lastSeen == nil || time.Since(*lastSeen) > 90*time.Second {
 			status = "offline"
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "architecture": architecture, "status": status, "screenCount": screens, "selectedDisplayId": selectedDisplayID, "lastSeenAt": lastSeen, "createdAt": created})
+		items = append(items, map[string]any{"id": id, "name": name, "label": label, "architecture": architecture, "status": status, "screenCount": screens, "selectedDisplayId": selectedDisplayID, "lastSeenAt": lastSeen, "createdAt": created})
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (a *App) putDeviceLabel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Label string `json:"label"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if len(label) > 100 {
+		writeError(w, http.StatusBadRequest, errors.New("设备备注不能超过 100 字符"))
+		return
+	}
+	_, pool, err := a.snapshot()
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err)
+		return
+	}
+	result, err := pool.Exec(r.Context(), `UPDATE devices SET label=$2 WHERE id=$1 AND deleted_at IS NULL`, r.PathValue("id"), label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("保存设备备注失败: %w", err))
+		return
+	}
+	if result.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, errors.New("设备不存在"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"label": label})
 }
 
 func (a *App) getDisplaySelection(w http.ResponseWriter, r *http.Request) {
@@ -897,12 +927,12 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	var codeID string
+	var codeID, activationLabel string
 	var expiresAt time.Time
 	var usedAt *time.Time
 	var boundInstallation *string
 	var revokedAt, supersededAt *time.Time
-	err = tx.QueryRow(r.Context(), `SELECT id,expires_at,used_at,installation_id,revoked_at,superseded_at FROM activation_codes WHERE code_hash=$1 FOR UPDATE`, hash(strings.TrimSpace(req.Code))).Scan(&codeID, &expiresAt, &usedAt, &boundInstallation, &revokedAt, &supersededAt)
+	err = tx.QueryRow(r.Context(), `SELECT id,label,expires_at,used_at,installation_id,revoked_at,superseded_at FROM activation_codes WHERE code_hash=$1 FOR UPDATE`, hash(strings.TrimSpace(req.Code))).Scan(&codeID, &activationLabel, &expiresAt, &usedAt, &boundInstallation, &revokedAt, &supersededAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, errors.New("激活码不存在"))
 		return
@@ -956,14 +986,14 @@ func (a *App) activateClient(w http.ResponseWriter, r *http.Request) {
 				status = "pending"
 			}
 			deviceName = strings.TrimSpace(req.DeviceName)
-			if _, err := tx.Exec(r.Context(), `UPDATE devices SET name=$2,architecture=$3,status=$4,deleted_at=NULL,deleted_by=NULL WHERE id=$1`, deviceID, deviceName, req.Architecture, status); err != nil {
+			if _, err := tx.Exec(r.Context(), `UPDATE devices SET name=$2,label=$3,architecture=$4,status=$5,deleted_at=NULL,deleted_by=NULL WHERE id=$1`, deviceID, deviceName, strings.TrimSpace(activationLabel), req.Architecture, status); err != nil {
 				writeError(w, http.StatusInternalServerError, fmt.Errorf("恢复设备激活记录失败: %w", err))
 				return
 			}
 		} else {
 			deviceID, _ = uuid()
 			deviceName = strings.TrimSpace(req.DeviceName)
-			if _, err := tx.Exec(r.Context(), `INSERT INTO devices(id,installation_id,name,architecture,status) VALUES($1,$2,$3,$4,'pending')`, deviceID, req.InstallationID, deviceName, req.Architecture); err != nil {
+			if _, err := tx.Exec(r.Context(), `INSERT INTO devices(id,installation_id,name,label,architecture,status) VALUES($1,$2,$3,$4,$5,'pending')`, deviceID, req.InstallationID, deviceName, strings.TrimSpace(activationLabel), req.Architecture); err != nil {
 				writeError(w, http.StatusConflict, fmt.Errorf("创建设备激活记录失败: %w", err))
 				return
 			}
@@ -1376,7 +1406,7 @@ func (a *App) createDebugSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT a.id,a.operation,a.script_sha256,a.duration_ms,a.exit_code,a.output_truncated,a.created_at,s.id,d.id,d.name,u.login_name FROM debug_audits a JOIN debug_sessions s ON s.id=a.session_id JOIN devices d ON d.id=s.device_id JOIN administrators u ON u.id=s.created_by ORDER BY a.created_at DESC LIMIT 500`)
+	rows, err := pool.Query(r.Context(), `SELECT a.id,a.operation,a.script_sha256,a.duration_ms,a.exit_code,a.output_truncated,a.created_at,s.id,d.id,d.name,d.label,u.login_name FROM debug_audits a JOIN debug_sessions s ON s.id=a.session_id JOIN devices d ON d.id=s.device_id JOIN administrators u ON u.id=s.created_by ORDER BY a.created_at DESC LIMIT 500`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1385,15 +1415,15 @@ func (a *App) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, duration int64
-		var operation, scriptSHA, sessionID, deviceID, deviceName, administrator string
+		var operation, scriptSHA, sessionID, deviceID, deviceName, deviceLabel, administrator string
 		var exitCode *int
 		var truncated bool
 		var created time.Time
-		if err := rows.Scan(&id, &operation, &scriptSHA, &duration, &exitCode, &truncated, &created, &sessionID, &deviceID, &deviceName, &administrator); err != nil {
+		if err := rows.Scan(&id, &operation, &scriptSHA, &duration, &exitCode, &truncated, &created, &sessionID, &deviceID, &deviceName, &deviceLabel, &administrator); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "operation": operation, "scriptSha256": scriptSHA, "durationMs": duration, "exitCode": exitCode, "outputTruncated": truncated, "createdAt": created, "sessionId": sessionID, "deviceId": deviceID, "deviceName": deviceName, "administrator": administrator})
+		items = append(items, map[string]any{"id": id, "operation": operation, "scriptSha256": scriptSHA, "durationMs": duration, "exitCode": exitCode, "outputTruncated": truncated, "createdAt": created, "sessionId": sessionID, "deviceId": deviceID, "deviceName": deviceName, "deviceLabel": deviceLabel, "administrator": administrator})
 	}
 	writeJSON(w, http.StatusOK, items)
 }

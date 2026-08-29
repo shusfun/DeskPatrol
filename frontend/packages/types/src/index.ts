@@ -24,6 +24,7 @@ export type Administrator = { id: number; loginName: string; role: "super_admin"
 export type Device = {
   id: string;
   name: string;
+  label: string;
   architecture: "amd64" | "arm64";
   status: "online" | "offline" | "locked" | "pending" | string;
   screenCount: number;

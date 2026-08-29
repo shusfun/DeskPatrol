@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS devices (
 	mesh_id TEXT,
 	client_token_hash TEXT UNIQUE,
   name TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
   architecture TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   screen_count INTEGER NOT NULL DEFAULT 1 CHECK (screen_count > 0),
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS enrollment_downloads (
 );
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS mesh_id TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS client_token_hash TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_by BIGINT REFERENCES administrators(id);
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS selected_display_id INTEGER;
@@ -144,6 +146,22 @@ BEGIN
   END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_client_token ON devices(client_token_hash) WHERE client_token_hash IS NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM deployment_migrations WHERE name = '2026-08-29-device-display-label') THEN
+    WITH latest_labels AS (
+      SELECT DISTINCT ON (installation_id) installation_id, BTRIM(label) AS label
+      FROM activation_codes
+      WHERE used_at IS NOT NULL AND BTRIM(label) <> ''
+      ORDER BY installation_id, used_at DESC
+    )
+    UPDATE devices d
+    SET label = latest_labels.label
+    FROM latest_labels
+    WHERE d.installation_id = latest_labels.installation_id AND d.label = '';
+    INSERT INTO deployment_migrations(name) VALUES('2026-08-29-device-display-label');
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS wall_layouts (
   administrator_id BIGINT PRIMARY KEY REFERENCES administrators(id) ON DELETE CASCADE,
   tile_count INTEGER NOT NULL DEFAULT 9 CHECK (tile_count IN (1,4,9,16)),

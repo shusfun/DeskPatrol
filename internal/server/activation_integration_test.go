@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,10 @@ func TestConnectionKeyTakeoverDeleteAndRestore(t *testing.T) {
 	app, pool, administratorID := integrationTestApp(t)
 	first := createIntegrationConnectionKey(t, app, administratorID, "first")
 	firstActivation := activateIntegrationClient(t, app, first, "0123456789abcdef0123456789abcdef", http.StatusCreated)
+	var firstLabel string
+	if err := pool.QueryRow(context.Background(), `SELECT label FROM devices WHERE id=$1`, firstActivation.DeviceID).Scan(&firstLabel); err != nil || firstLabel != "first" {
+		t.Fatalf("首次激活必须保存连接密钥备注: label=%q err=%v", firstLabel, err)
+	}
 	second := createIntegrationConnectionKey(t, app, administratorID, "second")
 	copied := copyIntegrationConnectionKey(t, app, second.ID)
 	if copied.ConnectionKey != second.ConnectionKey {
@@ -67,6 +72,60 @@ func TestConnectionKeyTakeoverDeleteAndRestore(t *testing.T) {
 	thirdActivation := activateIntegrationClient(t, app, third, "0123456789abcdef0123456789abcdef", http.StatusCreated)
 	if thirdActivation.DeviceID != firstActivation.DeviceID || thirdActivation.AgentSetupRequired {
 		t.Fatalf("删除后新密钥必须恢复原设备及 Mesh 身份: first=%#v third=%#v", firstActivation, thirdActivation)
+	}
+	empty := createIntegrationConnectionKey(t, app, administratorID, "")
+	activateIntegrationClient(t, app, empty, "0123456789abcdef0123456789abcdef", http.StatusCreated)
+	if err := pool.QueryRow(context.Background(), `SELECT label FROM devices WHERE id=$1`, firstActivation.DeviceID).Scan(&firstLabel); err != nil || firstLabel != "" {
+		t.Fatalf("空备注重新激活必须清空旧管理备注: label=%q err=%v", firstLabel, err)
+	}
+}
+
+func TestDeviceLabelUpdatePersistsAndValidates(t *testing.T) {
+	app, pool, administratorID := integrationTestApp(t)
+	key := createIntegrationConnectionKey(t, app, administratorID, "initial")
+	activation := activateIntegrationClient(t, app, key, "abcdef0123456789abcdef0123456789", http.StatusCreated)
+
+	put := func(label string, expectedStatus int) string {
+		raw, _ := json.Marshal(map[string]string{"label": label})
+		request := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+activation.DeviceID+"/label", bytes.NewReader(raw))
+		request.SetPathValue("id", activation.DeviceID)
+		request = request.WithContext(context.WithValue(request.Context(), principalKey, principal{ID: administratorID, LoginName: "admin"}))
+		response := httptest.NewRecorder()
+		app.putDeviceLabel(response, request)
+		if response.Code != expectedStatus {
+			t.Fatalf("更新设备备注返回 %d，期望 %d: %s", response.Code, expectedStatus, response.Body.String())
+		}
+		var result struct {
+			Data struct {
+				Label string `json:"label"`
+			} `json:"data"`
+		}
+		if expectedStatus == http.StatusOK {
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result.Data.Label
+	}
+	if label := put(" 财务室 01 ", http.StatusOK); label != "财务室 01" {
+		t.Fatalf("设备备注未去除首尾空白: %q", label)
+	}
+	if label := put("", http.StatusOK); label != "" {
+		t.Fatalf("设备备注应允许清空: %q", label)
+	}
+	put(strings.Repeat("x", 101), http.StatusBadRequest)
+	missingRequest := httptest.NewRequest(http.MethodPut, "/api/v1/devices/00000000-0000-4000-8000-000000000099/label", bytes.NewReader([]byte(`{"label":"missing"}`)))
+	missingRequest.SetPathValue("id", "00000000-0000-4000-8000-000000000099")
+	missingRequest = missingRequest.WithContext(context.WithValue(missingRequest.Context(), principalKey, principal{ID: administratorID, LoginName: "admin"}))
+	missingResponse := httptest.NewRecorder()
+	app.putDeviceLabel(missingResponse, missingRequest)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("不存在设备更新备注应返回 404，实际 %d: %s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	var stored string
+	if err := pool.QueryRow(context.Background(), `SELECT label FROM devices WHERE id=$1`, activation.DeviceID).Scan(&stored); err != nil || stored != "" {
+		t.Fatalf("设备备注清空未持久化: label=%q err=%v", stored, err)
 	}
 }
 
