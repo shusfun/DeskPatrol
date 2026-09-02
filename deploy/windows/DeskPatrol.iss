@@ -24,7 +24,6 @@ AppComments=DeskPatrol 设备监控客户端
 AppVersion={#MyVersion}
 AppPublisher=DeskPatrol
 DefaultDirName={autopf}\DeskPatrol
-DefaultLanguage=chinesesimp
 DisableProgramGroupPage=yes
 ArchitecturesAllowed={#AllowedArch}
 PrivilegesRequired=admin
