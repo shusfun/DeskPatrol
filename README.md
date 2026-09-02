@@ -41,3 +41,5 @@ Nginx 示例会安装到 `/etc/deskpatrol/nginx.conf.example`。配置证书与�
 Setup 完成后，Linux 服务在后台下载当前 Release 的 Windows 安装包并校验 manifest 与 SHA-256。客户端和浏览器只从 DeskPatrol Linux 服务下载，不获取 GitHub 下载地址。
 
 DeskPatrol、MeshCentral、MeshAgent 和 Wails 均不执行自动更新。升级必须重新构建 Release 并由管理员显式安装。
+
+Windows 客户端支持在状态页重新激活或卸载 DeskPatrol。重新激活会移除本机设备绑定、MeshAgent 和客户端数据，然后使用新的连接密钥注册；卸载会通过系统卸载器清理 MeshAgent、安装目录和 `%ProgramData%\\DeskPatrol`。Windows 安装包使用简体中文安装与卸载向导。

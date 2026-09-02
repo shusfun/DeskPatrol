@@ -13,5 +13,7 @@ func protectDataDirectory(path string) error           { return os.Chmod(path, 0
 func installMeshAgentElevated(string, string) error {
 	return errors.New("MeshAgent 安装仅支持 Windows")
 }
+func uninstallMeshAgentElevated() error     { return errors.New("MeshAgent 卸载仅支持 Windows") }
+func launchDeskPatrolUninstaller() error    { return errors.New("DeskPatrol 卸载仅支持 Windows") }
 func meshAgentServiceStatus() string        { return "仅 Windows 支持" }
 func meshAgentServiceState() (string, bool) { return "仅 Windows 支持", false }

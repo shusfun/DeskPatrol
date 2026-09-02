@@ -45,11 +45,20 @@ func main() {
 		return
 	}
 	var request struct {
+		Operation   string `json:"operation"`
 		DownloadURL string `json:"downloadUrl"`
 		SHA256      string `json:"sha256"`
 	}
 	if err := json.Unmarshal(raw, &request); err != nil {
 		writeResult(pipe, err)
+		return
+	}
+	if request.Operation == "uninstall" {
+		writeResult(pipe, uninstall())
+		return
+	}
+	if request.Operation != "install" {
+		writeResult(pipe, errors.New("提权操作不正确"))
 		return
 	}
 	writeResult(pipe, install(request.DownloadURL, request.SHA256))
@@ -135,6 +144,51 @@ func verifyService() error {
 		return fmt.Errorf("MeshAgent 服务状态异常: %d", status.CurrentState)
 	}
 	return nil
+}
+
+func uninstall() error {
+	programFiles := os.Getenv("ProgramFiles")
+	if programFiles == "" {
+		return errors.New("ProgramFiles 环境变量不存在")
+	}
+	directory := filepath.Join(programFiles, "DeskPatrol")
+	meshAgent := filepath.Join(directory, "MeshAgent.exe")
+	if _, err := os.Stat(meshAgent); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return verifyServiceRemoved()
+		}
+		return fmt.Errorf("读取 MeshAgent 文件失败: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, meshAgent, "-fulluninstall")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("卸载 MeshAgent 服务失败: %w: %s", err, concise(string(output)))
+	}
+	if err := verifyServiceRemoved(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyServiceRemoved() error {
+	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseServiceHandle(manager)
+	name, _ := windows.UTF16PtrFromString("Mesh Agent")
+	service, err := windows.OpenService(manager, name, windows.SERVICE_QUERY_STATUS)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("卸载后无法检查 MeshAgent 服务: %w", err)
+	}
+	windows.CloseServiceHandle(service)
+	return errors.New("MeshAgent 服务卸载后仍然存在")
 }
 
 func writeResult(pipe io.Writer, operationError error) {

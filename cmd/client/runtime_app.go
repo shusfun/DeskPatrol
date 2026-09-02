@@ -334,6 +334,34 @@ func (a *RuntimeApp) RetryAgentSetup() error {
 	return nil
 }
 
+func (a *RuntimeApp) Reactivate() error {
+	a.signalAgentSetup()
+	if err := uninstallMeshAgentElevated(); err != nil {
+		return err
+	}
+	if err := a.store.ClearAllData(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *RuntimeApp) Uninstall() error {
+	if err := a.store.ClearAllData(); err != nil {
+		return err
+	}
+	if err := launchDeskPatrolUninstaller(); err != nil {
+		return err
+	}
+	a.mu.RLock()
+	app := a.app
+	a.mu.RUnlock()
+	if app == nil {
+		return errors.New("DeskPatrol 应用尚未初始化")
+	}
+	app.Quit()
+	return nil
+}
+
 func (a *RuntimeApp) startAgentSetup() {
 	state, err := a.loadState()
 	if err != nil || state.DeviceID == "" || state.ServerURL == "" || state.DeviceToken == "" {

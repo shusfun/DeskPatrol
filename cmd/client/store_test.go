@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,5 +54,39 @@ func TestClearStateDoesNotRemoveInstallationID(t *testing.T) {
 	preserved, err := store.InstallationID()
 	if err != nil || preserved != installationID {
 		t.Fatalf("安装 ID 被错误清除: before=%s after=%s err=%v", installationID, preserved, err)
+	}
+}
+
+func TestClearAllDataRemovesAllLocalArtifactsAndRotatesInstallationID(t *testing.T) {
+	store := &LocalStore{dir: t.TempDir()}
+	installationID, err := store.InstallationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(LocalState{DeviceID: "device-1", DeviceToken: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendFrontendError(`{"message":"failure"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.LogsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.LogsDir(), "runtime.log"), []byte("log"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearAllData(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load()
+	if err != nil || state.DeviceID != "" {
+		t.Fatalf("清理后状态仍存在: %#v err=%v", state, err)
+	}
+	if _, err := os.Stat(store.LogsDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("日志目录未删除: %v", err)
+	}
+	rotated, err := store.InstallationID()
+	if err != nil || rotated == installationID {
+		t.Fatalf("清理后安装 ID 未轮换: before=%s after=%s err=%v", installationID, rotated, err)
 	}
 }

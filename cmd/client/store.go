@@ -72,6 +72,22 @@ func (s *LocalStore) ClearState() error {
 	return err
 }
 
+// ClearAllData 删除所有本地客户端数据，使下一次激活生成新的安装身份。
+func (s *LocalStore) ClearAllData() error {
+	paths := []string{
+		filepath.Join(s.dir, "state.dat"),
+		filepath.Join(s.dir, "installation-id.dat"),
+		filepath.Join(s.dir, "frontend-errors.dat"),
+		filepath.Join(s.dir, "logs"),
+	}
+	for _, path := range paths {
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("清理客户端数据失败: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *LocalStore) InstallationID() (string, error) {
 	path := filepath.Join(s.dir, "installation-id.dat")
 	raw, err := readProtectedFile(path)

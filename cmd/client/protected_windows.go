@@ -77,6 +77,22 @@ func cryptUnprotect(raw []byte) ([]byte, error) {
 }
 
 func installMeshAgentElevated(downloadURL, expectedSHA256 string) error {
+	payload, err := json.Marshal(map[string]string{"operation": "install", "downloadUrl": downloadURL, "sha256": expectedSHA256})
+	if err != nil {
+		return err
+	}
+	return runHelperElevated(payload, "MeshAgent 安装失败")
+}
+
+func uninstallMeshAgentElevated() error {
+	payload, err := json.Marshal(map[string]string{"operation": "uninstall"})
+	if err != nil {
+		return err
+	}
+	return runHelperElevated(payload, "MeshAgent 卸载失败")
+}
+
+func runHelperElevated(payload []byte, defaultError string) error {
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return err
@@ -129,7 +145,6 @@ func installMeshAgentElevated(downloadURL, expectedSHA256 string) error {
 	case <-time.After(90 * time.Second):
 		return errors.New("等待提权 helper 超时或用户取消了 UAC")
 	}
-	payload, _ := json.Marshal(map[string]string{"downloadUrl": downloadURL, "sha256": expectedSHA256})
 	if err := writeFrame(pipe, payload); err != nil {
 		return fmt.Errorf("向提权 helper 发送配置失败: %w", err)
 	}
@@ -145,7 +160,26 @@ func installMeshAgentElevated(downloadURL, expectedSHA256 string) error {
 		return fmt.Errorf("提权 helper 响应不正确: %w", err)
 	}
 	if !result.OK {
-		return errors.New(firstNonEmpty(result.Error, "MeshAgent 安装失败"))
+		return errors.New(firstNonEmpty(result.Error, defaultError))
+	}
+	return nil
+}
+
+func launchDeskPatrolUninstaller() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	uninstaller := filepath.Join(filepath.Dir(executable), "unins000.exe")
+	if _, err := os.Stat(uninstaller); err != nil {
+		return fmt.Errorf("DeskPatrol 卸载器不可用: %w", err)
+	}
+	verb, _ := windows.UTF16PtrFromString("runas")
+	target, _ := windows.UTF16PtrFromString(uninstaller)
+	directory, _ := windows.UTF16PtrFromString(filepath.Dir(executable))
+	arguments, _ := windows.UTF16PtrFromString("/VERYSILENT /SUPPRESSMSGBOXES /NORESTART")
+	if err := windows.ShellExecute(0, verb, target, arguments, directory, windows.SW_HIDE); err != nil {
+		return fmt.Errorf("启动 DeskPatrol 卸载器失败: %w", err)
 	}
 	return nil
 }
