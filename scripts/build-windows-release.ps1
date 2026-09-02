@@ -25,6 +25,8 @@ if ($LASTEXITCODE -ne 0) { throw "提权 helper 构建失败，exit=$LASTEXITCOD
 
 $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
 if (-not (Test-Path -LiteralPath $iscc)) { throw "未找到 Inno Setup 6：$iscc" }
+$languageFile = Join-Path $repoRoot 'deploy\windows\Languages\ChineseSimplified.isl'
+if (-not (Test-Path -LiteralPath $languageFile)) { throw "未找到 Inno Setup 简体中文语言文件：$languageFile" }
 $output = Join-Path $repoRoot "dist\windows\$Architecture"
-& $iscc "/DMyVersion=$Version" "/DMyArch=$Architecture" "/DSourceDir=$stage" "/DOutputDir=$output" (Join-Path $repoRoot 'deploy\windows\DeskPatrol.iss')
+& $iscc "/DMyVersion=$Version" "/DMyArch=$Architecture" "/DSourceDir=$stage" "/DOutputDir=$output" "/DLanguageFile=$languageFile" (Join-Path $repoRoot 'deploy\windows\DeskPatrol.iss')
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup 构建失败，exit=$LASTEXITCODE" }

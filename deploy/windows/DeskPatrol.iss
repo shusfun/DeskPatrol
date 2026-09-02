@@ -10,6 +10,9 @@
 #ifndef OutputDir
   #error OutputDir is required
 #endif
+#ifndef LanguageFile
+  #error LanguageFile is required
+#endif
 
 #if MyArch == "arm64"
   #define AllowedArch "arm64"
@@ -36,7 +39,7 @@ WizardStyle=modern
 SetupLogging=yes
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "{#LanguageFile}"
 
 [Files]
 Source: "{#SourceDir}\DeskPatrol.exe"; DestDir: "{app}"; Flags: ignoreversion
