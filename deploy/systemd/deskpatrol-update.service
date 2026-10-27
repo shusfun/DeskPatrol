@@ -1,0 +1,10 @@
+[Unit]
+Description=DeskPatrol 自更新
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/deskpatrol-update
+TimeoutStartSec=2h
+PrivateTmp=true

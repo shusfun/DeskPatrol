@@ -123,6 +123,9 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/downloads/{filename}", a.auth(http.HandlerFunc(a.download)))
 	mux.Handle("GET /api/v1/releases/jobs", a.auth(http.HandlerFunc(a.listReleaseJobs)))
 	mux.Handle("POST /api/v1/releases/sync", a.auth(http.HandlerFunc(a.syncRelease)))
+	mux.Handle("GET /api/v1/system/update", a.auth(http.HandlerFunc(a.getSystemUpdate)))
+	mux.Handle("GET /api/v1/system/update/latest", a.auth(http.HandlerFunc(a.getLatestSystemVersion)))
+	mux.Handle("POST /api/v1/system/update", a.auth(http.HandlerFunc(a.postSystemUpdate)))
 	mux.Handle("GET /api/v1/audit-logs", a.auth(http.HandlerFunc(a.listAuditLogs)))
 	mux.Handle("POST /api/v1/runtime-debug/sessions", a.auth(http.HandlerFunc(a.createDebugSession)))
 	mux.Handle("DELETE /api/v1/runtime-debug/sessions/{id}", a.auth(http.HandlerFunc(a.closeDebugSession)))
@@ -1327,7 +1330,7 @@ func (a *App) listDownloads(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listReleaseJobs(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,version,status,progress,total,error_message,created_at,updated_at FROM release_jobs ORDER BY created_at DESC LIMIT 1`)
+	rows, err := pool.Query(r.Context(), `SELECT id,version,status,progress,total,error_message,source,created_at,updated_at FROM release_jobs ORDER BY created_at DESC LIMIT 1`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1335,14 +1338,14 @@ func (a *App) listReleaseJobs(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, version, status, errorMessage string
+		var id, version, status, errorMessage, source string
 		var progress, total int64
 		var created, updated time.Time
-		if err := rows.Scan(&id, &version, &status, &progress, &total, &errorMessage, &created, &updated); err != nil {
+		if err := rows.Scan(&id, &version, &status, &progress, &total, &errorMessage, &source, &created, &updated); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "version": version, "status": status, "progress": progress, "total": total, "error": errorMessage, "createdAt": created, "updatedAt": updated})
+		items = append(items, map[string]any{"id": id, "version": version, "status": status, "progress": progress, "total": total, "error": errorMessage, "source": source, "createdAt": created, "updatedAt": updated})
 	}
 	writeJSON(w, http.StatusOK, items)
 }

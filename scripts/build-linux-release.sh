@@ -61,5 +61,5 @@ node -e 'const { createRequire } = require("node:module"); const requireFromMesh
   "$stage/meshcentral/node_modules/meshcentral/meshcentral.js"
 
 mkdir -p "$repo_root/dist/linux/$architecture"
-tar -czf "$repo_root/dist/linux/$architecture/deskpatrol-linux-$architecture-$version.tar.gz" -C "$work_dir" deskpatrol
+tar -czf "$repo_root/dist/linux/$architecture/deskpatrol-linux-$architecture-$version.tar.gz" --owner=0 --group=0 --numeric-owner -C "$work_dir" deskpatrol
 echo "Linux $architecture Release 包已生成"

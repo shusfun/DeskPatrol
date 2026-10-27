@@ -40,6 +40,10 @@ Nginx 示例会安装到 `/etc/deskpatrol/nginx.conf.example`。配置证书与�
 
 Setup 完成后，Linux 服务在后台下载当前 Release 的 Windows 安装包并校验 manifest 与 SHA-256。客户端和浏览器只从 DeskPatrol Linux 服务下载，不获取 GitHub 下载地址。
 
-DeskPatrol、MeshCentral、MeshAgent 和 Wails 均不执行自动更新。升级必须重新构建 Release 并由管理员显式安装。
+下载 Linux 部署包和 Windows 安装包前，会对 github.com 直连和几个 GitHub 加速镜像测速，选最快的线路。镜像只负责传输大文件。`SHA256SUMS` 和 `manifest.json` 始终直连 GitHub 获取，下载结果必须通过其中的 SHA-256 校验。线路列表在 `internal/releasemirror` 与 `scripts/install.sh` 中各有一份，由测试保证一致。
+
+DeskPatrol、MeshCentral、MeshAgent 和 Wails 均不执行自动更新。升级可以通过 SSH 重新运行 `install.sh`，也可以由管理员在管理端“系统设置 → 系统更新”中手动触发。
+
+自更新的特权部分由 root 运行的 `deskpatrol-update.service` 完成。后端只能把目标版本写入 `/var/lib/deskpatrol/update/request`，`deskpatrol-update.path` 检测到请求后启动更新器。更新器从 root 拥有的 `/etc/deskpatrol-updater.conf` 读取仓库地址，只接受高于当前版本的目标版本。它从 GitHub 获取目标版本的 `install.sh` 并校验 SHA-256 后执行。状态和日志写在 `/var/lib/deskpatrol-update/`。v0.1.22 及更早的服务器需要先通过 SSH 运行一次新版 `install.sh` 来安装自更新组件。
 
 Windows 客户端支持在状态页重新激活或卸载 DeskPatrol。重新激活会移除本机设备绑定、MeshAgent 和客户端数据，然后使用新的连接密钥注册；卸载会通过系统卸载器清理 MeshAgent、安装目录和 `%ProgramData%\\DeskPatrol`。Windows 安装包使用简体中文安装与卸载向导。

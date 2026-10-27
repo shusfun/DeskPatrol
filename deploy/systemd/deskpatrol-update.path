@@ -1,0 +1,9 @@
+[Unit]
+Description=DeskPatrol 自更新请求监视
+
+[Path]
+PathExists=/var/lib/deskpatrol/update/request
+Unit=deskpatrol-update.service
+
+[Install]
+WantedBy=multi-user.target

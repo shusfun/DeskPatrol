@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"deskpatrol/internal/appconfig"
+	"deskpatrol/internal/releasemirror"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -240,7 +241,13 @@ func (s *Service) downloadArtifacts(ctx context.Context, jobID, version string, 
 	if selected[0].Architecture == selected[1].Architecture {
 		return nil, errors.New("Release manifest 缺少一个 Windows 架构安装包")
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE release_jobs SET total=$2,updated_at=NOW() WHERE id=$1`, jobID, total)
+	// manifest 已直连 GitHub 获取；大文件走测速最快的线路，下载后仍按 manifest 的 SHA-256 校验。
+	probeURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s", s.config.GitHubRepository, version, selected[0].Filename)
+	prefix, _, err := releasemirror.Select(ctx, s.client, releasemirror.Prefixes, probeURL)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE release_jobs SET total=$2,source=$3,updated_at=NOW() WHERE id=$1`, jobID, total, releasemirror.Name(prefix))
 	stagingDirectory := s.stagingDirectory(jobID)
 	if err := os.MkdirAll(stagingDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("创建 Release 暂存目录失败: %w", err)
@@ -248,7 +255,7 @@ func (s *Service) downloadArtifacts(ctx context.Context, jobID, version string, 
 	artifacts := make([]downloadedArtifact, 0, len(selected))
 	var progress int64
 	for _, artifact := range selected {
-		cached, written, err := s.downloadOne(ctx, version, stagingDirectory, artifact, func(value int64) {
+		cached, written, err := s.downloadOne(ctx, prefix, version, stagingDirectory, artifact, func(value int64) {
 			_, _ = s.pool.Exec(context.Background(), `UPDATE release_jobs SET progress=$2,updated_at=NOW() WHERE id=$1`, jobID, progress+value)
 		})
 		if err != nil {
@@ -260,8 +267,8 @@ func (s *Service) downloadArtifacts(ctx context.Context, jobID, version string, 
 	return artifacts, nil
 }
 
-func (s *Service) downloadOne(ctx context.Context, version, directory string, artifact Artifact, progress func(int64)) (downloadedArtifact, int64, error) {
-	base := fmt.Sprintf("https://github.com/%s/releases/download/v%s", s.config.GitHubRepository, version)
+func (s *Service) downloadOne(ctx context.Context, prefix, version, directory string, artifact Artifact, progress func(int64)) (downloadedArtifact, int64, error) {
+	base := prefix + fmt.Sprintf("https://github.com/%s/releases/download/v%s", s.config.GitHubRepository, version)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+artifact.Filename, nil)
 	if err != nil {
 		return downloadedArtifact{}, 0, err
@@ -414,6 +421,9 @@ func (s *Service) cleanupOlderReleaseDirectories(releasesDirectory, current stri
 	}
 	return nil
 }
+
+// CompareVersions 比较两个 x.y.z 版本号，left 较新时返回正数。
+func CompareVersions(left, right string) int { return compareVersions(left, right) }
 
 func compareVersions(left, right string) int {
 	leftParts := strings.Split(left, ".")
