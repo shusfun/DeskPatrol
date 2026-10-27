@@ -162,12 +162,20 @@ BEGIN
     INSERT INTO deployment_migrations(name) VALUES('2026-08-29-device-display-label');
   END IF;
 END $$;
+CREATE TABLE IF NOT EXISTS device_groups (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE CHECK (BTRIM(name) <> ''),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS group_id UUID REFERENCES device_groups(id) ON DELETE SET NULL;
 CREATE TABLE IF NOT EXISTS wall_layouts (
   administrator_id BIGINT PRIMARY KEY REFERENCES administrators(id) ON DELETE CASCADE,
   tile_count INTEGER NOT NULL DEFAULT 9 CHECK (tile_count IN (1,4,9,16)),
   device_order JSONB NOT NULL DEFAULT '[]'::jsonb,
+  collapsed_groups JSONB NOT NULL DEFAULT '[]'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE wall_layouts ADD COLUMN IF NOT EXISTS collapsed_groups JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE TABLE IF NOT EXISTS release_artifacts (
   id UUID PRIMARY KEY,
   version TEXT NOT NULL,

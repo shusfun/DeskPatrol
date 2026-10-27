@@ -25,6 +25,7 @@ export type Device = {
   id: string;
   name: string;
   label: string;
+  groupId: string | null;
   architecture: "amd64" | "arm64";
   status: "online" | "offline" | "locked" | "pending" | string;
   screenCount: number;
@@ -32,7 +33,8 @@ export type Device = {
   lastSeenAt?: string;
   createdAt: string;
 };
-export type WallLayout = { tileCount: 1 | 4 | 9 | 16; deviceOrder: string[] };
+export type WallLayout = { tileCount: 1 | 4 | 9 | 16; deviceOrder: string[]; collapsedGroups: string[] };
+export type DeviceGroup = { id: string; name: string; createdAt: string };
 export type ActivationCodeStatus = "unused" | "used" | "expired" | "superseded" | "revoked";
 export type ActivationCode = { id: string; label: string; expiresAt: string; usedAt?: string; createdAt: string; status: ActivationCodeStatus; canCopy: boolean };
 export type ActivationCodeCreated = { id: string; connectionKey: string; expiresAt: string };

@@ -101,6 +101,11 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/devices", a.auth(http.HandlerFunc(a.listDevices)))
 	mux.Handle("DELETE /api/v1/devices/{id}", a.auth(http.HandlerFunc(a.deleteDevice)))
 	mux.Handle("PUT /api/v1/devices/{id}/label", a.auth(http.HandlerFunc(a.putDeviceLabel)))
+	mux.Handle("PUT /api/v1/devices/{id}/group", a.auth(http.HandlerFunc(a.putDeviceGroup)))
+	mux.Handle("GET /api/v1/device-groups", a.auth(http.HandlerFunc(a.listDeviceGroups)))
+	mux.Handle("POST /api/v1/device-groups", a.auth(http.HandlerFunc(a.createDeviceGroup)))
+	mux.Handle("PUT /api/v1/device-groups/{id}", a.auth(http.HandlerFunc(a.renameDeviceGroup)))
+	mux.Handle("DELETE /api/v1/device-groups/{id}", a.auth(http.HandlerFunc(a.deleteDeviceGroup)))
 	mux.Handle("GET /api/v1/devices/{id}/display-selection", a.auth(http.HandlerFunc(a.getDisplaySelection)))
 	mux.Handle("PUT /api/v1/devices/{id}/display-selection", a.auth(http.HandlerFunc(a.putDisplaySelection)))
 	mux.Handle("POST /api/v1/devices/{id}/desktop-ticket", a.auth(http.HandlerFunc(a.createDesktopTicket)))
@@ -478,7 +483,7 @@ func (a *App) debugAuth(next http.Handler) http.Handler {
 
 func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, pool, _ := a.snapshot()
-	rows, err := pool.Query(r.Context(), `SELECT id,name,label,architecture,status,screen_count,selected_display_id,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
+	rows, err := pool.Query(r.Context(), `SELECT id,name,label,group_id,architecture,status,screen_count,selected_display_id,last_seen_at,created_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -487,18 +492,19 @@ func (a *App) listDevices(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, name, label, architecture, status string
+		var groupID *string
 		var screens int
 		var selectedDisplayID *int
 		var lastSeen *time.Time
 		var created time.Time
-		if err := rows.Scan(&id, &name, &label, &architecture, &status, &screens, &selectedDisplayID, &lastSeen, &created); err != nil {
+		if err := rows.Scan(&id, &name, &label, &groupID, &architecture, &status, &screens, &selectedDisplayID, &lastSeen, &created); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if lastSeen == nil || time.Since(*lastSeen) > 90*time.Second {
 			status = "offline"
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "label": label, "architecture": architecture, "status": status, "screenCount": screens, "selectedDisplayId": selectedDisplayID, "lastSeenAt": lastSeen, "createdAt": created})
+		items = append(items, map[string]any{"id": id, "name": name, "label": label, "groupId": groupID, "architecture": architecture, "status": status, "screenCount": screens, "selectedDisplayId": selectedDisplayID, "lastSeenAt": lastSeen, "createdAt": created})
 	}
 	writeJSON(w, http.StatusOK, items)
 }
@@ -698,17 +704,17 @@ func (a *App) getWallLayout(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(principalKey).(principal)
 	_, pool, _ := a.snapshot()
 	var tileCount int
-	var order []byte
-	err := pool.QueryRow(r.Context(), `SELECT tile_count,device_order FROM wall_layouts WHERE administrator_id=$1`, user.ID).Scan(&tileCount, &order)
+	var order, collapsed []byte
+	err := pool.QueryRow(r.Context(), `SELECT tile_count,device_order,collapsed_groups FROM wall_layouts WHERE administrator_id=$1`, user.ID).Scan(&tileCount, &order, &collapsed)
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, http.StatusOK, map[string]any{"tileCount": 9, "deviceOrder": []string{}})
+		writeJSON(w, http.StatusOK, map[string]any{"tileCount": 9, "deviceOrder": []string{}, "collapsedGroups": []string{}})
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tileCount": tileCount, "deviceOrder": jsonRaw(order)})
+	writeJSON(w, http.StatusOK, map[string]any{"tileCount": tileCount, "deviceOrder": jsonRaw(order), "collapsedGroups": jsonRaw(collapsed)})
 }
 
 type jsonRaw []byte
@@ -717,8 +723,9 @@ func (value jsonRaw) MarshalJSON() ([]byte, error) { return value, nil }
 
 func (a *App) putWallLayout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TileCount   int      `json:"tileCount"`
-		DeviceOrder []string `json:"deviceOrder"`
+		TileCount       int      `json:"tileCount"`
+		DeviceOrder     []string `json:"deviceOrder"`
+		CollapsedGroups []string `json:"collapsedGroups"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -727,9 +734,18 @@ func (a *App) putWallLayout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("宫格数量只支持 1、4、9、16"))
 		return
 	}
+	collapsed, err := normalizeCollapsedGroups(req.CollapsedGroups)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.CollapsedGroups = collapsed
+	if req.DeviceOrder == nil {
+		req.DeviceOrder = []string{}
+	}
 	user := r.Context().Value(principalKey).(principal)
 	_, pool, _ := a.snapshot()
-	if _, err := pool.Exec(r.Context(), `INSERT INTO wall_layouts(administrator_id,tile_count,device_order) VALUES($1,$2,$3) ON CONFLICT(administrator_id) DO UPDATE SET tile_count=EXCLUDED.tile_count,device_order=EXCLUDED.device_order,updated_at=NOW()`, user.ID, req.TileCount, req.DeviceOrder); err != nil {
+	if _, err := pool.Exec(r.Context(), `INSERT INTO wall_layouts(administrator_id,tile_count,device_order,collapsed_groups) VALUES($1,$2,$3,$4) ON CONFLICT(administrator_id) DO UPDATE SET tile_count=EXCLUDED.tile_count,device_order=EXCLUDED.device_order,collapsed_groups=EXCLUDED.collapsed_groups,updated_at=NOW()`, user.ID, req.TileCount, req.DeviceOrder, req.CollapsedGroups); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
