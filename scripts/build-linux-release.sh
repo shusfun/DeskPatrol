@@ -4,7 +4,7 @@ set -euo pipefail
 architecture="${1:-}"
 version="${2:-}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-node_version="22.22.0"
+node_version="22.23.2"
 export GOPROXY="https://goproxy.cn"
 export GOSUMDB="sum.golang.google.cn"
 

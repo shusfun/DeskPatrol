@@ -4,7 +4,7 @@ DeskPatrol 是 Linux 管理端与 Windows Wails 客户端组成的设备监控�
 
 ## 本地开发
 
-工具链固定为 Go `1.26.1`、Node `22.22.0`、pnpm `10.32.1` 和 Wails `3.0.0-alpha2.117`。
+工具链固定为 Go `1.26.1`、Node `22.23.2`、pnpm `10.32.1` 和 Wails `3.0.0-alpha2.117`。
 
 ```bash
 pnpm install --frozen-lockfile --child-concurrency=2

@@ -13,7 +13,7 @@ permissions:
 
 env:
   GO_VERSION: 1.26.1
-  NODE_VERSION: 22.22.0
+  NODE_VERSION: 22.23.2
   PNPM_VERSION: 10.32.1
 
 jobs:

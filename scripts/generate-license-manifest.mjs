@@ -35,7 +35,7 @@ const modules = [...moduleLines].map((line) => {
 const manifest = {
   schemaVersion: 1,
   fixedRuntimes: [
-    { name: "Node.js", version: "22.22.0", license: "MIT", source: "https://github.com/nodejs/node" },
+    { name: "Node.js", version: "22.23.2", license: "MIT", source: "https://github.com/nodejs/node" },
     { name: "MeshCentral", version: "1.2.5", license: "Apache-2.0", source: "https://github.com/Ylianst/MeshCentral" },
   ],
   packages: [...frontendPackages, ...modules],
