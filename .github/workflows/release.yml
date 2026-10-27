@@ -114,5 +114,5 @@ jobs:
         env: { GITHUB_REPOSITORY: '${{ github.repository }}' }
       - run: node scripts/release.mjs verify --version '${{ inputs.version }}'
         env: { GITHUB_REPOSITORY: '${{ github.repository }}' }
-      - run: gh release create "v${{ inputs.version }}" dist/releases/${{ inputs.version }}/* --title "DeskPatrol v${{ inputs.version }}" --generate-notes
+      - run: gh release create "v${{ inputs.version }}" dist/releases/${{ inputs.version }}/* --target "${{ github.sha }}" --title "DeskPatrol v${{ inputs.version }}" --generate-notes
         env: { GH_TOKEN: '${{ github.token }}' }
